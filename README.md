@@ -13,6 +13,7 @@ PoinTr is a transformer-based model for point cloud completion.  By representing
 ![intro](fig/pointr.gif)
 
 ## 🔥News
+- **2023-9-2** **AdaPoinTr** accepted by T-PAMI, Projected-ShapeNet dataset see [here](./DATASET.md)
 - **2023-1-11** Release **AdaPoinTr** (PoinTr + Adaptive Denoising Queries), achieving SOTA performance on various benchmarks. [Arxiv](https://arxiv.org/abs/2301.04545).
 - **2022-06-01** Implement [SnowFlakeNet](https://arxiv.org/abs/2108.04444).
 - **2021-10-07** Our solution based on PoinTr wins the ***Championship*** on [MVP Completion Challenge (ICCV Workshop 2021)](https://mvp-dataset.github.io/MVP/Completion.html). The code will come soon.
@@ -34,6 +35,8 @@ We provide pretrained AdaPoinTr models (coming soon):
 | --- | --- |  --- |
 | ShapeNet-55 | Tsinghua Cloud / Google Drive / BaiDuYun  | CD = 0.81e-3|
 | ShapeNet-34 | Tsinghua Cloud / Google Drive / BaiDuYun | CD = 1.23e-3| 
+| Projected_ShapeNet-55 | [Tsinghua Cloud](https://cloud.tsinghua.edu.cn/f/41ed3a765c4b42d98d01/?dl=1) / Google Drive / [[BaiDuYun](https://pan.baidu.com/s/1Vx-E557-dOj7dLi132--Uw?pwd=dycc)](code:dycc)  | CD = 9.58e-3|
+| Projected_ShapeNet-34 | [Tsinghua Cloud](https://cloud.tsinghua.edu.cn/f/71494f78cb694e45a448/?dl=1) / Google Drive / [[BaiDuYun](https://pan.baidu.com/s/1GQnfJuxtpV5Mchl-98BRBg?pwd=dycc)](code:dycc)  | CD = 9.12e-3|
 | PCN |  [[Tsinghua Cloud](https://cloud.tsinghua.edu.cn/f/b822a5979762417ba75e/?dl=1)] / [[Google Drive](https://drive.google.com/file/d/17pE2U2T2k4w1KfmDbL6U-GkEwD-duTaF/view?usp=share_link)]  / [[BaiDuYun](https://pan.baidu.com/s/1KWccgcKXVIdVo4wJAmZ_8w?pwd=rc7p)](code:rc7p)  | CD = 6.53e-3|
 ## Usage
 
@@ -116,11 +119,16 @@ bash ./scripts/test.sh <GPU_IDS>  \
 ```
 
 ####  Some examples:
-Test the PoinTr pretrained model on the PCN benchmark:
+Test the PoinTr (AdaPoinTr) pretrained model on the PCN benchmark or Projected_ShapeNet:
 ```
 bash ./scripts/test.sh 0 \
     --ckpts ./pretrained/PoinTr_PCN.pth \
     --config ./cfgs/PCN_models/PoinTr.yaml \
+    --exp_name example
+
+bash ./scripts/test.sh 0 \
+    --ckpts ./pretrained/PoinTr_ps55.pth \
+    --config ./cfgs/Projected_ShapeNet55_models/AdaPoinTr.yaml \
     --exp_name example
 ```
 Test the PoinTr pretrained model on ShapeNet55 benchmark (*easy* mode):
