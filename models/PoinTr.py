@@ -57,7 +57,7 @@ class Fold(nn.Module):
 
         return fd2
 
-@MODELS.register_module()
+@MODELS.register_module()   
 class PoinTr(nn.Module):
     def __init__(self, config, **kwargs):
         super().__init__()

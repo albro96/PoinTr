@@ -101,7 +101,9 @@ def run_net(args, config, train_writer=None, val_writer=None):
                     if idx == 0:
                         print_log('padding while KITTI training', logger=logger)
                     partial = misc.random_dropping(partial, epoch) # specially for KITTI finetune
-
+            elif dataset_name == 'TeethSeg':
+                partial = data[0].cuda()
+                gt = data[1].cuda()
             elif dataset_name == 'ShapeNet':
                 gt = data.cuda()
                 partial, _ = misc.seprate_point_cloud(gt, npoints, [int(npoints * 1/4) , int(npoints * 3/4)], fixed_points = None)
@@ -202,12 +204,15 @@ def validate(base_model, test_dataloader, epoch, ChamferDisL1, ChamferDisL2, val
             if dataset_name == 'PCN' or dataset_name == 'Completion3D' or dataset_name == 'Projected_ShapeNet':
                 partial = data[0].cuda()
                 gt = data[1].cuda()
+            elif dataset_name == 'TeethSeg':
+                partial = data[0].cuda()
+                gt = data[1].cuda()
             elif dataset_name == 'ShapeNet':
                 gt = data.cuda()
                 partial, _ = misc.seprate_point_cloud(gt, npoints, [int(npoints * 1/4) , int(npoints * 3/4)], fixed_points = None)
                 partial = partial.cuda()
             else:
-                raise NotImplementedError(f'Train phase do not support {dataset_name}')
+                raise NotImplementedError(f'Validation phase do not support {dataset_name}')
 
             ret = base_model(partial)
             coarse_points = ret[0]
@@ -351,6 +356,27 @@ def test(base_model, test_dataloader, ChamferDisL1, ChamferDisL2, args, config, 
             npoints = config.dataset.test._base_.N_POINTS
             dataset_name = config.dataset.test._base_.NAME
             if dataset_name == 'PCN' or dataset_name == 'Projected_ShapeNet':
+                partial = data[0].cuda()
+                gt = data[1].cuda()
+
+                ret = base_model(partial)
+                coarse_points = ret[0]
+                dense_points = ret[-1]
+
+                sparse_loss_l1 =  ChamferDisL1(coarse_points, gt)
+                sparse_loss_l2 =  ChamferDisL2(coarse_points, gt)
+                dense_loss_l1 =  ChamferDisL1(dense_points, gt)
+                dense_loss_l2 =  ChamferDisL2(dense_points, gt)
+
+                test_losses.update([sparse_loss_l1.item() * 1000, sparse_loss_l2.item() * 1000, dense_loss_l1.item() * 1000, dense_loss_l2.item() * 1000])
+
+                _metrics = Metrics.get(dense_points, gt, require_emd=True)
+                # test_metrics.update(_metrics)
+
+                if taxonomy_id not in category_metrics:
+                    category_metrics[taxonomy_id] = AverageMeter(Metrics.names())
+                category_metrics[taxonomy_id].update(_metrics)
+            elif dataset_name == 'TeethSeg':
                 partial = data[0].cuda()
                 gt = data[1].cuda()
 
