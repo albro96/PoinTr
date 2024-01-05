@@ -113,17 +113,35 @@ class TeethSeg(data.Dataset):
         self.partial_points_path = config.PARTIAL_POINTS_PATH
         self.complete_points_path = config.COMPLETE_POINTS_PATH
         self.category_file = config.CATEGORY_FILE_PATH
+        self.category_dict = config.CATEGORY_DICT
+        
+        self.npoints_gt = config.N_POINTS_GT
+        self.npoints_partial = config.N_POINTS_PARTIAL
         self.npoints = config.N_POINTS
+
         self.subset = config.subset
-        # self.cars = config.CARS
+
+        # check if all value lists in category_dict are the same length
+        num_renderings = len(self.category_dict[list(self.category_dict.keys())[0]])
+        for key in self.category_dict.keys():
+            assert len(self.category_dict[key]) == num_renderings
 
         # Load the dataset indexing file
         self.dataset_categories = []
+
         with open(self.category_file) as f:
             self.dataset_categories = json.loads(f.read())
 
-        self.n_renderings = 12 if self.subset == 'train' else 1
-        self.file_list = self._get_file_list(self.subset, self.n_renderings)
+        # crop the dataset_categories to only include the categories in category_dict
+        self.dataset_categories = [dc for dc in self.dataset_categories if dc['taxonomy_name'] in self.category_dict.keys()]
+
+        print([dc['taxonomy_name'] for dc in self.dataset_categories])
+
+        self.n_renderings = num_renderings if self.subset == 'train' else 1
+        
+        # self.file_list = self._get_file_list(self.subset, self.n_renderings)
+        self.file_list = self._get_file_list(self.subset)
+
         self.transforms = self._get_transforms(self.subset)
 
     def _get_transforms(self, subset):
@@ -160,7 +178,8 @@ class TeethSeg(data.Dataset):
                 ]
             )
 
-    def _get_file_list(self, subset, n_renderings=1):
+    # def _get_file_list(self, subset, n_renderings=1):
+    def _get_file_list(self, subset):
         """Prepare file list for the dataset"""
         file_list = []
 
@@ -170,17 +189,27 @@ class TeethSeg(data.Dataset):
 
             for s in samples:
                 file_list.append({
-                    'taxonomy_id':
-                    dc['taxonomy_id'],
-                    'model_id':
-                    s,
-                    'partial_path': [
-                        self.partial_points_path % (subset, dc['taxonomy_id'], s, i)
-                        for i in range(n_renderings)
-                    ],
-                    'gt_path':
-                    self.complete_points_path % (subset, dc['taxonomy_id'], s),
+                    'taxonomy_id':  dc['taxonomy_id'],
+                    'model_id':     s,
+                    'partial_path': [self.partial_points_path % ('/'.join(dc['taxonomy_name'].split('_')), self.npoints_partial, s, tooth) for tooth in self.category_dict[dc['taxonomy_name']]],
+                    'gt_path':      self.complete_points_path % ('/'.join(dc['taxonomy_name'].split('_')), self.npoints_gt, s),
                 })
+                # print(file_list[-1])
+
+            # if self.gt_type == 'single':
+            #     # gt =  single
+            #     for s in samples:
+            #         for tooth in self.renderingslist:
+            #             file_list.append({
+            #                 'taxonomy_id':  dc['taxonomy_id'],
+            #                 'model_id':     s,
+            #                 'partial_path': self.partial_points_path % ('/'.join(dc['taxonomy_name'].split('_')), self.npoints, s, tooth),
+            #                 'gt_path':      self.complete_points_path % (self.npoints_gt, s, tooth),
+            #             })
+
+            # elif self.gt_type == 'full':
+                # gt = full
+
 
         print_log('Complete collecting files of the dataset. Total files: %d' % len(file_list), logger='PCNDATASET')
         return file_list
