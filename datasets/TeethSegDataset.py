@@ -114,7 +114,6 @@ class TeethSeg(data.Dataset):
         self.complete_points_path = config.COMPLETE_POINTS_PATH
         self.category_file = config.CATEGORY_FILE_PATH
         self.category_dict = config.CATEGORY_DICT
-        
         self.npoints_gt = config.N_POINTS_GT
         self.npoints_partial = config.N_POINTS_PARTIAL
         self.npoints = config.N_POINTS
@@ -187,6 +186,7 @@ class TeethSeg(data.Dataset):
             print_log('Collecting files of Taxonomy [ID=%s, Name=%s]' % (dc['taxonomy_id'], dc['taxonomy_name']), logger='PCNDATASET')
             samples = dc[subset]
 
+            # full GT
             for s in samples:
                 file_list.append({
                     'taxonomy_id':  dc['taxonomy_id'],
@@ -194,22 +194,17 @@ class TeethSeg(data.Dataset):
                     'partial_path': [self.partial_points_path % ('/'.join(dc['taxonomy_name'].split('_')), self.npoints_partial, s, tooth) for tooth in self.category_dict[dc['taxonomy_name']]],
                     'gt_path':      self.complete_points_path % ('/'.join(dc['taxonomy_name'].split('_')), self.npoints_gt, s),
                 })
-                # print(file_list[-1])
 
-            # if self.gt_type == 'single':
-            #     # gt =  single
-            #     for s in samples:
-            #         for tooth in self.renderingslist:
-            #             file_list.append({
-            #                 'taxonomy_id':  dc['taxonomy_id'],
-            #                 'model_id':     s,
-            #                 'partial_path': self.partial_points_path % ('/'.join(dc['taxonomy_name'].split('_')), self.npoints, s, tooth),
-            #                 'gt_path':      self.complete_points_path % (self.npoints_gt, s, tooth),
-            #             })
 
-            # elif self.gt_type == 'full':
-                # gt = full
-
+            # single GT
+            # for s in samples:
+            #     for tooth in self.category_dict[dc['taxonomy_name']]:
+            #         file_list.append({
+            #             'taxonomy_id':  dc['taxonomy_id'],
+            #             'model_id':     s,
+            #             'partial_path': self.partial_points_path % ('/'.join(dc['taxonomy_name'].split('_')), self.npoints_partial, s, tooth),
+            #             'gt_path': self.complete_points_path % (self.npoints_gt, s, tooth),
+            #         })
 
         print_log('Complete collecting files of the dataset. Total files: %d' % len(file_list), logger='PCNDATASET')
         return file_list
