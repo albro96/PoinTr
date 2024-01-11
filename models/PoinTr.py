@@ -2,7 +2,7 @@ import torch
 from torch import nn
 
 from pointnet2_ops import pointnet2_utils
-from extensions.chamfer_dist import ChamferDistanceL1
+from extensions.chamfer_dist import ChamferDistanceL1, ChamferDistanceL2
 from .Transformer import PCTransformer
 from .build import MODELS
 
@@ -65,6 +65,7 @@ class PoinTr(nn.Module):
         self.knn_layer = config.knn_layer
         self.num_pred = config.num_pred
         self.num_query = config.num_query
+        self.gt_type = config.get('gt_type', 'full')
 
         self.fold_step = int(pow(self.num_pred//self.num_query, 0.5) + 0.5)
         self.base_model = PCTransformer(in_chans = 3, embed_dim = self.trans_dim, depth = [6, 8], drop_rate = 0., num_query = self.num_query, knn_layer = self.knn_layer)
@@ -81,7 +82,8 @@ class PoinTr(nn.Module):
         self.build_loss_func()
 
     def build_loss_func(self):
-        self.loss_func = ChamferDistanceL1()
+        # self.loss_func = ChamferDistanceL1()
+        self.loss_func = ChamferDistanceL2()
 
     def get_loss(self, ret, gt, epoch=0):
         loss_coarse = self.loss_func(ret[0], gt)
@@ -114,10 +116,11 @@ class PoinTr(nn.Module):
         # rebuild_points = (relative_xyz.reshape(B,M,3,-1) + coarse_point_cloud.unsqueeze(-1)).transpose(2,3).reshape(B, -1, 3)
 
         # cat the input
-        inp_sparse = fps(xyz, self.num_query)
-        coarse_point_cloud = torch.cat([coarse_point_cloud, inp_sparse], dim=1).contiguous()
-        rebuild_points = torch.cat([rebuild_points, xyz],dim=1).contiguous()
-
+        if self.gt_type == 'full' :
+            inp_sparse = fps(xyz, self.num_query)
+            coarse_point_cloud = torch.cat([coarse_point_cloud, inp_sparse], dim=1).contiguous()
+            rebuild_points = torch.cat([rebuild_points, xyz],dim=1).contiguous()
         ret = (coarse_point_cloud, rebuild_points)
+
         return ret
 

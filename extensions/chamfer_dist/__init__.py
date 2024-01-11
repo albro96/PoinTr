@@ -9,10 +9,14 @@ import torch
 
 import chamfer
 
-
 class ChamferFunction(torch.autograd.Function):
     @staticmethod
     def forward(ctx, xyz1, xyz2):
+
+        # Ensure the inputs are float32 tensors (if in torch.cuda.amp.autocast context)
+        xyz1 = xyz1.float()
+        xyz2 = xyz2.float()
+
         dist1, dist2, idx1, idx2 = chamfer.forward(xyz1, xyz2)
         ctx.save_for_backward(xyz1, xyz2, idx1, idx2)
 
@@ -23,7 +27,6 @@ class ChamferFunction(torch.autograd.Function):
         xyz1, xyz2, idx1, idx2 = ctx.saved_tensors
         grad_xyz1, grad_xyz2 = chamfer.backward(xyz1, xyz2, idx1, idx2, grad_dist1, grad_dist2)
         return grad_xyz1, grad_xyz2
-
 
 class ChamferDistanceL2(torch.nn.Module):
     f''' Chamder Distance L2

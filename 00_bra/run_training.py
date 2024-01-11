@@ -10,6 +10,7 @@ import json
 import shutil
 from datetime import datetime
 from easydict import EasyDict
+import os.path as op
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(BASE_DIR, '../'))
@@ -23,31 +24,67 @@ from utils import parser, dist_utils, misc
 from utils.logger import *
 from utils.config import *
 
+# User Input
+num_gpus = 2  # number of gpus
 
 def main(rank, world_size):
-    pada = import_dir_path()
+    network_type = 'PoinTr'
 
     data_config = EasyDict({
         "NAME": "TeethSeg",
         "CATEGORY_FILE_PATH": "/storage/share/data/3d-datasets/3DTeethSeg22/categories/TeethSeg.json",
-        "N_POINTS": 8192,
-        "N_POINTS_GT": 8192,
-        "N_POINTS_PARTIAL": 8192,
-        "CATEGORY_DICT": {'lower_35-37': ['36']},
-        "PARTIAL_POINTS_PATH": "/storage/share/nobackup/data/3DTeethSeg22/data/corr/%s/%s/%s/%s.pcd",
-        # "COMPLETE_POINTS_PATH": "/storage/share/nobackup/data/3DTeethSeg22/data/full/%s/%s/%s.pcd",
-        "COMPLETE_POINTS_PATH": "/storage/share/nobackup/data/3DTeethSeg22/data/gt/%s/%s/%s.pcd"
+        "N_POINTS_GT": 2048,
+        "N_POINTS_PARTIAL": 16384, # 2048 4096 8192 16384
+        "CATEGORY_DICT": {'lower_1-7': 'all'}, # 'all' or list of tooth numbers as strings ["36"]
+        "GT_TYPE": "single",
+        "CORR_TYPE": "corr", # "corr" or "corr-concat" for concat select n_points_partial per tooth
+        "DATA_DIR": "/storage/share/nobackup/data/3DTeethSeg22/data/",
+        "DATAFORMAT": "pcd",
     })
+
+    suffix = 'denseloss-0_1_CDL2_sample2048'
+
+    if not suffix.startswith('_') and suffix != '':
+        suffix = '_' + suffix
+
+    # concat all elements in data_config.CATEGORY_DICT.keys() to a string with - as separator
+    toothrange = ''
+
+    for key, val in data_config.CATEGORY_DICT.items():
+        toothrange += f'-{key}'
+
+        if isinstance(val, list):
+            toothrange += '--' + "-".join(val)
+        else:
+            toothrange += f'--{val}'
+
+    if toothrange.startswith('-'):
+        toothrange = toothrange[1:]
+
+    experiment_name = datetime.now().strftime('%y%m%d') + f'_{network_type}_' + f'{toothrange}-corr-{data_config.N_POINTS_PARTIAL}_gt-{data_config.GT_TYPE}-{data_config.N_POINTS_GT}{suffix}'
+
+    pada = import_dir_path()
+
+    json_path = op.join(pada.datasets.TeethSeg22.base_dir, 'categories', 'toothlist_dict.json')
+
+    with open(json_path, 'r') as f:
+        toothlist_dict = json.load(f)       
+
+    for k,v in data_config.CATEGORY_DICT.items():
+        if v == 'all':
+            data_config.CATEGORY_DICT[k] = toothlist_dict[k.split('_')[0]][k.split('_')[1]]
+
+    data_config.N_POINTS = data_config.N_POINTS_GT
 
     args = EasyDict({
         # 'config': './cfgs/TeethSeg_models/AdaPoinTr.yaml',  # replace with your actual config file
         'launcher': 'pytorch',
         'local_rank': rank,
-        'num_workers': 4,
+        'num_workers': 10, #4,
         'seed': 0,
         'deterministic': False,
         'sync_bn': False,
-        'exp_name': datetime.now().strftime('%y%m%d') + '_' + 'corr-35-37-8192_gt-single-8192_rend-36',
+        'exp_name': experiment_name,
         'experiment_dir': pada.models.pointr.model_dir,
         'start_ckpts': None,
         'ckpts': None,
@@ -58,7 +95,9 @@ def main(rank, world_size):
     })
 
 
-    network_config = {
+    network_config_dict = EasyDict()
+
+    network_config_dict.AdaPoinTr = {
         "optimizer": {
             "type": "AdamW",
             "kwargs": {
@@ -106,7 +145,7 @@ def main(rank, world_size):
         "model": {
             "NAME": "AdaPoinTr",
             "num_query": 512,
-            "num_points": data_config.N_POINTS,
+            "num_points": data_config.N_POINTS_GT,
             "center_num": [512, 256],
             "global_feature_dim": 1024,
             "encoder_type": "graph",
@@ -135,13 +174,59 @@ def main(rank, world_size):
             }
         },
 
-        "total_bs": 16, #16,
+        "total_bs": int(16*num_gpus), #16,
         "step_per_update": 1,
-        "max_epoch": 1500,
-        "consider_metric": "CDL1"
+        "max_epoch": 1000,
+        "consider_metric": "CDL1",
+        "dense_loss_coeff": 0.1,
     }
 
+    network_config_dict.PoinTr = {
+        "optimizer": {
+            "type": "AdamW",
+            "kwargs": {
+                "lr": 0.0001,
+                "weight_decay": 0.0001
+            }
+        },
+        "scheduler": {
+            "type": "LambdaLR",
+            "kwargs": {
+                "decay_step": 40,
+                "lr_decay": 0.7,
+                "lowest_decay": 0.02  # min lr = lowest_decay * lr
+            }
+        },
+        "bnmscheduler": {
+            "type": "Lambda",
+            "kwargs": {
+                "decay_step": 40,
+                "bn_decay": 0.5,
+                "bn_momentum": 0.9,
+                "lowest_decay": 0.01
+            }
+        },
+        "dataset": {
+            "train": {"_base_": data_config, "others": {"subset": "train"}},
+            "val": {"_base_": data_config, "others": {"subset": "test"}},
+            "test": {"_base_": data_config, "others": {"subset": "test"}}
+        },
+        "model": {
+            "NAME": "PoinTr",
+            "num_pred": data_config.N_POINTS_GT,
+            "gt_type": data_config.GT_TYPE,
+            "num_query": 224,
+            "knn_layer": 1,
+            "trans_dim": 384
+        },
+        "total_bs": int(28*num_gpus),
+        "step_per_update": 1,
+        "max_epoch": 1000,
+        "consider_metric": "CDL2",
+        "dense_loss_coeff": 0.1,
+    }
 
+    network_config = network_config_dict[network_type]
 
 
     if args.test and args.resume:
@@ -180,6 +265,7 @@ def main(rank, world_size):
 
     # CUDA
     args.use_gpu = torch.cuda.is_available()
+    args.use_amp_autocast = True
 
     if args.use_gpu:
         torch.backends.cudnn.benchmark = True
@@ -192,6 +278,7 @@ def main(rank, world_size):
         # re-set gpu_ids with distributed training mode
         _, world_size = dist_utils.get_dist_info()
         args.world_size = world_size
+
 
     # logger
     timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
@@ -243,8 +330,7 @@ def main(rank, world_size):
 
 
 if __name__ == '__main__':
-    world_size = 1  # number of gpus
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12345'  # Set any free port
-    os.environ['WORLD_SIZE'] = str(world_size)
-    mp.spawn(main, args=(world_size,), nprocs=world_size, join=True)
+    os.environ['WORLD_SIZE'] = str(num_gpus)
+    mp.spawn(main, args=(num_gpus,), nprocs=num_gpus, join=True)

@@ -90,6 +90,7 @@ def run_net(args, config, train_writer=None, val_writer=None):
 
         base_model.train()  # set model to training mode
         n_batches = len(train_dataloader)
+
         for idx, (taxonomy_ids, model_ids, data) in enumerate(train_dataloader):
             data_time.update(time.time() - batch_start_time)
             npoints = config.dataset.train._base_.N_POINTS
@@ -113,11 +114,14 @@ def run_net(args, config, train_writer=None, val_writer=None):
 
             num_iter += 1
            
-            ret = base_model(partial)
-            
-            sparse_loss, dense_loss = base_model.module.get_loss(ret, gt, epoch)
+            with torch.cuda.amp.autocast(enabled=args.use_amp_autocast):
+                ret = base_model(partial)
+                sparse_loss, dense_loss = base_model.module.get_loss(ret, gt, epoch)
          
-            _loss = sparse_loss + dense_loss 
+            
+            _loss = sparse_loss + config.get('dense_loss_coeff', 1)*dense_loss 
+
+            # _loss = sparse_loss + dense_loss 
             _loss.backward()
 
             # forward
@@ -176,9 +180,14 @@ def run_net(args, config, train_writer=None, val_writer=None):
             if  metrics.better_than(best_metrics):
                 best_metrics = metrics
                 builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, 'ckpt-best', args, logger = logger)
-        builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, 'ckpt-last', args, logger = logger)      
-        if (config.max_epoch - epoch) < 2:
-            builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, f'ckpt-epoch-{epoch:03d}', args, logger = logger)     
+        builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, 'ckpt-last', args, logger = logger)  
+        # save every 100 epoch
+        if epoch % 100 == 0 and epoch != 0:
+            builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, f'ckpt-epoch-{epoch:03d}', args, logger = logger)  
+
+        # if (config.max_epoch - epoch) < 2:
+        #     builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, f'ckpt-epoch-{epoch:03d}', args, logger = logger)     
+
     if train_writer is not None and val_writer is not None:
         train_writer.close()
         val_writer.close()
@@ -214,7 +223,8 @@ def validate(base_model, test_dataloader, epoch, ChamferDisL1, ChamferDisL2, val
             else:
                 raise NotImplementedError(f'Validation phase do not support {dataset_name}')
 
-            ret = base_model(partial)
+            with torch.cuda.amp.autocast(enabled=args.use_amp_autocast):
+                ret = base_model(partial)
             coarse_points = ret[0]
             dense_points = ret[-1]
 
@@ -361,7 +371,8 @@ def test(base_model, test_dataloader, ChamferDisL1, ChamferDisL2, args, config, 
                 partial = data[0].cuda()
                 gt = data[1].cuda()
 
-                ret = base_model(partial)
+                with torch.cuda.amp.autocast(enabled=args.use_amp_autocast):
+                    ret = base_model(partial)
                 coarse_points = ret[0]
                 dense_points = ret[-1]
 
@@ -382,7 +393,8 @@ def test(base_model, test_dataloader, ChamferDisL1, ChamferDisL2, args, config, 
                 partial = data[0].cuda()
                 gt = data[1].cuda()
 
-                ret = base_model(partial)
+                with torch.cuda.amp.autocast(enabled=args.use_amp_autocast):
+                    ret = base_model(partial)
                 coarse_points = ret[0]
                 dense_points = ret[-1]
 
@@ -409,7 +421,8 @@ def test(base_model, test_dataloader, ChamferDisL1, ChamferDisL2, args, config, 
                     partial, _ = misc.seprate_point_cloud(gt, npoints, num_crop, fixed_points = item)
                     # NOTE: subsample the input
                     partial = misc.fps(partial, 2048)
-                    ret = base_model(partial)
+                    with torch.cuda.amp.autocast(enabled=args.use_amp_autocast):
+                        ret = base_model(partial)
                     coarse_points = ret[0]
                     dense_points = ret[-1]
 
@@ -427,9 +440,11 @@ def test(base_model, test_dataloader, ChamferDisL1, ChamferDisL2, args, config, 
                     if taxonomy_id not in category_metrics:
                         category_metrics[taxonomy_id] = AverageMeter(Metrics.names())
                     category_metrics[taxonomy_id].update(_metrics)
+                    
             elif dataset_name == 'KITTI':
                 partial = data.cuda()
-                ret = base_model(partial)
+                with torch.cuda.amp.autocast(enabled=args.use_amp_autocast):
+                    ret = base_model(partial)
                 dense_points = ret[-1]
                 target_path = os.path.join(args.experiment_path, 'vis_result')
                 if not os.path.exists(target_path):
