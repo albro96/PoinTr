@@ -50,7 +50,7 @@ def get_args():
 
     return args
 
-def inference_single(model, pc_path, args, config, root=None, save_as_pcd=False, filename=None):
+def inference_single(model, pc_path, args, config, root=None, save_as_pcd=False, filename=None, data_config=None):
     if root is not None:
         pc_file = os.path.join(root, pc_path)
     else:
@@ -66,8 +66,11 @@ def inference_single(model, pc_path, args, config, root=None, save_as_pcd=False,
         m = np.max(np.sqrt(np.sum(pc_ndarray**2, axis=1)))
         pc_ndarray = pc_ndarray / m
 
+    if data_config is None:
+        data_config = {}
+
     transform = Compose([{
-        'callback': 'UpSamplePoints',
+        'callback': data_config.get('SAMPLING_METHOD', 'UpSamplePoints'),
         'parameters': {
             'n_points': 2048
         },

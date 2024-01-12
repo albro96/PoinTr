@@ -10,6 +10,7 @@ import os
 import json
 from .build import DATASETS
 from utils.logger import *
+from easydict import EasyDict
 
 # References:
 # - https://github.com/hzxie/GRNet/blob/master/utils/data_loaders.py
@@ -26,10 +27,12 @@ class TeethSeg(data.Dataset):
         self.npoints_gt = config.N_POINTS_GT
         self.npoints_partial = config.N_POINTS_PARTIAL
         # self.npoints = config.N_POINTS
-        self.gt_type = config.GT_TYPE
+        self.gt_type = config.get("GT_TYPE", "single")
         self.data_dir = config.DATA_DIR
-        self.dataformat = config.DATAFORMAT
-        self.corr_type = config.CORR_TYPE
+        self.dataformat = config.get("DATAFORMAT", "pcd") 
+        self.corr_type = config.get("CORR_TYPE", "corr") 
+        self.sampling_method = config.get("SAMPLING_METHOD", 'RandomSamplePoints')
+        
 
         if subset is None:
             self.subset = config.subset
@@ -60,38 +63,33 @@ class TeethSeg(data.Dataset):
         self.transforms = self._get_transforms(self.subset)
 
     def _get_transforms(self, subset):
-        if subset == 'train':
-            return data_transforms.Compose(
-                [
-                    {
-                    'callback': 'RandomSamplePoints',
-                    'parameters': {'n_points': 2048},
-                    'objects': ['partial']
-                    }, 
-                    {
-                    'callback': 'RandomMirrorPoints',
-                    'objects': ['partial', 'gt']
-                    },
-                    {
-                    'callback': 'ToTensor',
-                    'objects': ['partial', 'gt']
-                    }
-                ]
-            )
-        else:
-            return data_transforms.Compose(
-                [
-                    {
-                    'callback': 'RandomSamplePoints',
-                    'parameters': {'n_points': 2048},
-                    'objects': ['partial']
-                    }, 
-                    {
-                    'callback': 'ToTensor',
-                    'objects': ['partial', 'gt']
-                    }
-                ]
-            )
+        transform_list = [
+            {
+            'callback': self.sampling_method, #'RandomSamplePoints',
+            'parameters': {'n_points': 2048},
+            'objects': ['partial']
+            }, 
+            {
+            'callback': 'RandomMirrorPoints',
+            'objects': ['partial', 'gt']
+            },
+            {
+            'callback': 'ToTensor',
+            'objects': ['partial', 'gt']
+            }
+            ]
+                        
+        if self.sampling_method == 'RandomSamplePoints':
+            if subset == 'train':
+                return data_transforms.Compose(transform_list)
+            else:
+                return data_transforms.Compose([transform_list[0], transform_list[-1]])    
+                  
+        elif self.sampling_method == 'None':
+            return data_transforms.Compose([transform_list[-1]])      
+            
+        elif self.sampling_method == 'FurthestPointSampling':
+            return data_transforms.Compose([transform_list[-1], transform_list[0]])
 
     # def _get_file_list(self, subset, n_renderings=1):
     def _get_file_list(self, subset):

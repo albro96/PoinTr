@@ -19,11 +19,11 @@ from tools import builder
 from tools.inference import inference_single
 from datasets.TeethSegDataset import TeethSeg
 
-model_name = '240110_PoinTr_'
+model_name = '240111_PoinTr_lower_1-7--all-corr-16384_gt-single-2048_denseloss-0_1_CDL2_sample2048'
 
-ckpt_type = 'ckpt-best.pth' # 'ckpt-epoch-1500.pth' #
+ckpt_types = ['ckpt-best'] #['ckpt-best.pth', 'ckpt-last.pth', ] #
 
-for ckpt_type in ['ckpt-best.pth', 'ckpt-last.pth']:
+for ckpt_type in ckpt_types:
 
     model_dir = pada.models.pointr.model_dir
     overwrite = False
@@ -34,7 +34,7 @@ for ckpt_type in ['ckpt-best.pth', 'ckpt-last.pth']:
 
     for dirpath, dirnames, filenames in os.walk(model_dir):
         for filename in filenames:
-            if filename == ckpt_type:
+            if Path(filename).stem == ckpt_type:
                 args = EasyDict({
                     'cfg_name': op.basename(dirpath),
                     'model_config': op.join(dirpath, 'config.json'), 
@@ -56,9 +56,10 @@ for ckpt_type in ['ckpt-best.pth', 'ckpt-last.pth']:
 
         data_config = config.dataset.train._base_
 
-        dataset = TeethSeg(data_config, 'test')
+        dataset = TeethSeg(data_config, dataset_type)
 
         file_list = dataset.file_list
+
 
         partial_paths = []
         for sample in file_list:
@@ -89,12 +90,12 @@ for ckpt_type in ['ckpt-best.pth', 'ckpt-last.pth']:
 
         state_dict = torch.load(args.model_checkpoint, map_location='cpu')
 
-        if 'best' in Path(args.model_checkpoint).stem:
-            suffix = '-best'
-        elif 'last' in Path(args.model_checkpoint).stem:
-            suffix = '-last'
-        else:
-            suffix = ''
+        # if 'best' in Path(args.model_checkpoint).stem:
+        #     suffix = '-best'
+        # elif 'last' in Path(args.model_checkpoint).stem:
+        #     suffix = '-last'
+        # else:
+        suffix = ''
 
         folder_name = f'{dataset_type}-epoch-{state_dict["epoch"]}{suffix}'
 
@@ -149,7 +150,8 @@ for ckpt_type in ['ckpt-best.pth', 'ckpt-last.pth']:
                     args = args,
                     config = config, 
                     save_as_pcd=True, 
-                    filename=filename
+                    filename=filename,
+                    data_config = data_config
                     )
         else:
             print(f'Files for {args.cfg_name} already exist.')

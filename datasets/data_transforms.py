@@ -8,6 +8,8 @@
 import numpy as np
 import torch
 import transforms3d
+from pointnet2_ops import pointnet2_utils
+
 
 class Compose(object):
     def __init__(self, transforms):
@@ -38,6 +40,31 @@ class Compose(object):
                             data[k] = transform(v)
 
         return data
+
+
+class FurthestPointSample():
+    def __init__(self, parameters):
+        self.n_points = parameters['n_points']
+
+    def __call__(self, ptcloud):
+        fps_idx = pointnet2_utils.furthest_point_sample(ptcloud, self.n_points) 
+        ptcloud = pointnet2_utils.gather_operation(ptcloud.transpose(1, 2).contiguous(), fps_idx).transpose(1,2).contiguous()
+
+        return ptcloud
+
+
+# class ToTensorCPU(object):
+#     def __init__(self, parameters):
+#         pass
+
+#     def __call__(self, arr):
+#         shape = arr.shape
+#         if len(shape) == 3:    # RGB/Depth Images
+#             arr = arr.transpose(2, 0, 1)
+
+#         # Ref: https://discuss.pytorch.org/t/torch-from-numpy-not-support-negative-strides/3663/2
+#         return torch.tensor(arr.copy(), device='cpu').float()
+    
 
 class ToTensor(object):
     def __init__(self, parameters):

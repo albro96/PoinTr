@@ -25,24 +25,25 @@ from utils.logger import *
 from utils.config import *
 
 # User Input
-num_gpus = 2  # number of gpus
+num_gpus = 4 # number of gpus
 
-def main(rank, world_size):
+def main(rank, world_size, param):
     network_type = 'PoinTr'
 
     data_config = EasyDict({
         "NAME": "TeethSeg",
         "CATEGORY_FILE_PATH": "/storage/share/data/3d-datasets/3DTeethSeg22/categories/TeethSeg.json",
         "N_POINTS_GT": 2048,
-        "N_POINTS_PARTIAL": 16384, # 2048 4096 8192 16384
+        "N_POINTS_PARTIAL": 4096, # 2048 4096 8192 16384
         "CATEGORY_DICT": {'lower_1-7': 'all'}, # 'all' or list of tooth numbers as strings ["36"]
         "GT_TYPE": "single",
         "CORR_TYPE": "corr", # "corr" or "corr-concat" for concat select n_points_partial per tooth
         "DATA_DIR": "/storage/share/nobackup/data/3DTeethSeg22/data/",
         "DATAFORMAT": "pcd",
+        "SAMPLING_METHOD": 'None', # 'None' 'RandomSamplePoints', 'FurthestPointSample'
     })
 
-    suffix = 'denseloss-0_1_CDL2_sample2048'
+    suffix = f'denseloss-{int(param*1000)}_CDL2_sample2048'
 
     if not suffix.startswith('_') and suffix != '':
         suffix = '_' + suffix
@@ -215,15 +216,15 @@ def main(rank, world_size):
             "NAME": "PoinTr",
             "num_pred": data_config.N_POINTS_GT,
             "gt_type": data_config.GT_TYPE,
-            "num_query": 224,
+            "num_query": 224,   # number of coarse points, dense points = 224*9 = 2016 (always true?)
             "knn_layer": 1,
             "trans_dim": 384
         },
-        "total_bs": int(28*num_gpus),
+        "total_bs": int(14*num_gpus), #int(28*num_gpus),
         "step_per_update": 1,
-        "max_epoch": 1000,
+        "max_epoch": 800,
         "consider_metric": "CDL2",
-        "dense_loss_coeff": 0.1,
+        "dense_loss_coeff": param,
     }
 
     network_config = network_config_dict[network_type]
@@ -265,7 +266,7 @@ def main(rank, world_size):
 
     # CUDA
     args.use_gpu = torch.cuda.is_available()
-    args.use_amp_autocast = True
+    args.use_amp_autocast = False
 
     if args.use_gpu:
         torch.backends.cudnn.benchmark = True
@@ -330,7 +331,13 @@ def main(rank, world_size):
 
 
 if __name__ == '__main__':
+
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12345'  # Set any free port
     os.environ['WORLD_SIZE'] = str(num_gpus)
-    mp.spawn(main, args=(num_gpus,), nprocs=num_gpus, join=True)
+
+    for param in [0.1, 0.2, 0.4, 0.8, 1]:
+        print(param)
+        mp.spawn(main, args=(num_gpus, param), nprocs=num_gpus, join=True)
+
+    # mp.spawn(main, args=(num_gpus,), nprocs=num_gpus, join=True)
