@@ -70,7 +70,7 @@ def inference_single(model, pc_path, args, config, root=None, save_as_pcd=False,
         data_config = {}
 
     transform = Compose([{
-        'callback': data_config.get('SAMPLING_METHOD', 'UpSamplePoints'),
+        'callback': 'UpSamplePoints' if data_config.get('SAMPLING_METHOD', None) in ['None', None] else data_config['SAMPLING_METHOD'],
         'parameters': {
             'n_points': 2048
         },

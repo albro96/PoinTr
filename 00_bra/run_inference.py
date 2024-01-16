@@ -19,11 +19,14 @@ from tools import builder
 from tools.inference import inference_single
 from datasets.TeethSegDataset import TeethSeg
 
-model_name = '240111_PoinTr_lower_1-7--all-corr-16384_gt-single-2048_denseloss-0_1_CDL2_sample2048'
+model_name = '240115_PoinTr_lower_1-7--all-corr-4096_gt-single-2048_denseloss-400_CDL2_sample2048'
 
-ckpt_types = ['ckpt-best'] #['ckpt-best.pth', 'ckpt-last.pth', ] #
+ckpt_types = ['ckpt-best', 'ckpt-last'] #
 
 for ckpt_type in ckpt_types:
+
+    if ckpt_type.endswith('.pth'):
+        ckpt_type = Path(ckpt_type).stem
 
     model_dir = pada.models.pointr.model_dir
     overwrite = False
