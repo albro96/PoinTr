@@ -24,8 +24,6 @@ from utils import parser, dist_utils, misc
 from utils.logger import *
 from utils.config import *
 
-# User Input
-num_gpus = 4 # number of gpus
 
 def main(rank, world_size, param):
     network_type = 'PoinTr'
@@ -79,7 +77,7 @@ def main(rank, world_size, param):
 
     args = EasyDict({
         # 'config': './cfgs/TeethSeg_models/AdaPoinTr.yaml',  # replace with your actual config file
-        'launcher': 'pytorch',
+        'launcher': 'pytorch' if world_size > 1 else 'none',
         'local_rank': rank,
         'num_workers': 10, #4,
         'seed': 0,
@@ -175,7 +173,7 @@ def main(rank, world_size, param):
             }
         },
 
-        "total_bs": int(16*num_gpus), #16,
+        "total_bs": int(16*world_size), #16,
         "step_per_update": 1,
         "max_epoch": 1000,
         "consider_metric": "CDL1",
@@ -220,7 +218,7 @@ def main(rank, world_size, param):
             "knn_layer": 1,
             "trans_dim": 384
         },
-        "total_bs": int(14*num_gpus), #int(28*num_gpus),
+        "total_bs": int(14*world_size), #int(28*num_gpus),
         "step_per_update": 1,
         "max_epoch": 800,
         "consider_metric": "CDL2",
@@ -270,6 +268,7 @@ def main(rank, world_size, param):
 
     if args.use_gpu:
         torch.backends.cudnn.benchmark = True
+
     # init distributed env first, since logger depends on the dist info.
     if args.launcher == 'none':
         args.distributed = False
@@ -330,14 +329,24 @@ def main(rank, world_size, param):
         run_net(args, config, train_writer, val_writer)
 
 
+
 if __name__ == '__main__':
+    # User Input
+    num_gpus = 1 # number of gpus
 
-    os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12345'  # Set any free port
-    os.environ['WORLD_SIZE'] = str(num_gpus)
+    for param in [1.0]:
 
-    for param in [0.1, 0.2, 0.4, 0.8, 1]:
         print(param)
-        mp.spawn(main, args=(num_gpus, param), nprocs=num_gpus, join=True)
+
+        print('Number of GPUs: ', num_gpus)
+
+        if num_gpus > 1:
+            os.environ['MASTER_ADDR'] = 'localhost'
+            os.environ['MASTER_PORT'] = '12345'  # Set any free port
+            os.environ['WORLD_SIZE'] = str(num_gpus)
+            mp.spawn(main, args=(num_gpus, param), nprocs=num_gpus, join=True)
+        else:
+            
+            main(rank=0, world_size=1, param=param)
 
     # mp.spawn(main, args=(num_gpus,), nprocs=num_gpus, join=True)

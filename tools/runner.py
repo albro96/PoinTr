@@ -60,6 +60,7 @@ def run_net(args, config, train_writer=None, val_writer=None):
     else:
         print_log('Using Data parallel ...' , logger = logger)
         base_model = nn.DataParallel(base_model).cuda()
+
     # optimizer & scheduler
     optimizer = builder.build_optimizer(base_model, config)
     
@@ -74,13 +75,19 @@ def run_net(args, config, train_writer=None, val_writer=None):
 
     # trainval
     # training
+    epoch_time_list = []
+
     base_model.zero_grad()
     for epoch in range(start_epoch, config.max_epoch + 1):
+        epoch_start_time = time.time()
+        epoch_allincl_start_time = time.time()
+    
         if args.distributed:
             train_sampler.set_epoch(epoch)
+
         base_model.train()
 
-        epoch_start_time = time.time()
+
         batch_start_time = time.time()
         batch_time = AverageMeter()
         data_time = AverageMeter()
@@ -165,12 +172,13 @@ def run_net(args, config, train_writer=None, val_writer=None):
         else:
             scheduler.step()
         epoch_end_time = time.time()
+        
 
         if train_writer is not None:
             train_writer.add_scalar('Loss/Epoch/Sparse', losses.avg(0), epoch)
             train_writer.add_scalar('Loss/Epoch/Dense', losses.avg(1), epoch)
-        print_log('[Training] EPOCH: %d EpochTime = %.3f (s) Losses = %s' %
-            (epoch,  epoch_end_time - epoch_start_time, ['%.4f' % l for l in losses.avg()]), logger = logger)
+
+        
 
         if epoch % args.val_freq == 0:
             # Validate the current model
@@ -180,13 +188,25 @@ def run_net(args, config, train_writer=None, val_writer=None):
             if  metrics.better_than(best_metrics):
                 best_metrics = metrics
                 builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, 'ckpt-best', args, logger = logger)
+
         builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, 'ckpt-last', args, logger = logger)  
         # save every 100 epoch
         if epoch % 100 == 0 and epoch != 0:
             builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, f'ckpt-epoch-{epoch:03d}', args, logger = logger)  
 
-        # if (config.max_epoch - epoch) < 2:
-        #     builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, f'ckpt-epoch-{epoch:03d}', args, logger = logger)     
+        if (config.max_epoch - epoch) < 2:
+            builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, f'ckpt-epoch-{epoch:03d}', args, logger = logger)   
+
+        epoch_allincl_end_time = time.time()
+
+        epoch_time_list.append(epoch_allincl_end_time - epoch_allincl_start_time)
+
+        mean_epoch_time = sum(epoch_time_list) / len(epoch_time_list)
+
+        est_time = mean_epoch_time * (config.max_epoch - epoch + 1)
+        
+        
+        print_log(f'[Training] EPOCH: {epoch}/{config.max_epoch} EpochTime = {time.strftime("%H:%M:%S", time.gmtime(epoch_time_list[-1]))} (hh:mm:ss) Remaining Time = {time.strftime("%H:%M:%S", time.gmtime(est_time))} (hh:mm:ss) Losses = {["%.4f" % l for l in losses.avg()]} \n' , logger = logger)
 
     if train_writer is not None and val_writer is not None:
         train_writer.close()
