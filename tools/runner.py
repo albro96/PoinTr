@@ -10,6 +10,25 @@ from utils.AverageMeter import AverageMeter
 from utils.metrics import Metrics
 from extensions.chamfer_dist import ChamferDistanceL1, ChamferDistanceL2
 
+# put somewhere else
+def format_duration(seconds):
+    minutes, seconds = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    days, hours = divmod(hours, 24)
+
+    # Python
+    if days > 0:
+        return f"{int(days):02d}:{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d} (dd:hh:mm:ss)"
+
+    if hours > 0:
+        return f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d} (hh:mm:ss)"
+
+    if minutes > 0:
+        return f"{int(minutes):02d}:{int(seconds):02d} (mm:ss)"
+
+    return f"{int(seconds):02d} (s)"
+
+
 def run_net(args, config, train_writer=None, val_writer=None):
     logger = get_logger(args.log_name)
     # build dataset
@@ -205,8 +224,8 @@ def run_net(args, config, train_writer=None, val_writer=None):
 
         est_time = mean_epoch_time * (config.max_epoch - epoch + 1)
         
-        
-        print_log(f'[Training] EPOCH: {epoch}/{config.max_epoch} EpochTime = {time.strftime("%H:%M:%S", time.gmtime(epoch_time_list[-1]))} (hh:mm:ss) Remaining Time = {time.strftime("%H:%M:%S", time.gmtime(est_time))} (hh:mm:ss) Losses = {["%.4f" % l for l in losses.avg()]} \n' , logger = logger)
+    
+        print_log(f'[Training] EPOCH: {epoch}/{config.max_epoch} EpochTime = {format_duration(epoch_time_list[-1])} Remaining Time = {format_duration(est_time)} Losses = {["%.4f" % l for l in losses.avg()]} \n' , logger = logger)
 
     if train_writer is not None and val_writer is not None:
         train_writer.close()

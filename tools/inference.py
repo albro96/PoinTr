@@ -69,16 +69,22 @@ def inference_single(model, pc_path, args, config, root=None, save_as_pcd=False,
     if data_config is None:
         data_config = {}
 
-    transform = Compose([{
-        'callback': 'UpSamplePoints' if data_config.get('SAMPLING_METHOD', None) in ['None', None] else data_config['SAMPLING_METHOD'],
+    transforms = []
+    if data_config.get('SAMPLING_METHOD', None) != 'None':
+        transforms.append({   
+        'callback': 'UpSamplePoints' if data_config.get('SAMPLING_METHOD', None) is None else data_config['SAMPLING_METHOD'],
         'parameters': {
             'n_points': 2048
         },
         'objects': ['input']
-    }, {
+        })
+    
+    transforms.append({
         'callback': 'ToTensor',
         'objects': ['input']
-    }])
+    })
+
+    transform = Compose(transforms)
     
     pc_ndarray_normalized = transform({'input': pc_ndarray})
     # inference

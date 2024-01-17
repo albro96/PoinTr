@@ -31,8 +31,8 @@ def main(rank, world_size, param):
     data_config = EasyDict({
         "NAME": "TeethSeg",
         "CATEGORY_FILE_PATH": "/storage/share/data/3d-datasets/3DTeethSeg22/categories/TeethSeg.json",
-        "N_POINTS_GT": 2048,
-        "N_POINTS_PARTIAL": 4096, # 2048 4096 8192 16384
+        "N_POINTS_GT": 4096,
+        "N_POINTS_PARTIAL": 8192, # 2048 4096 8192 16384
         "CATEGORY_DICT": {'lower_1-7': 'all'}, # 'all' or list of tooth numbers as strings ["36"]
         "GT_TYPE": "single",
         "CORR_TYPE": "corr", # "corr" or "corr-concat" for concat select n_points_partial per tooth
@@ -218,7 +218,7 @@ def main(rank, world_size, param):
             "knn_layer": 1,
             "trans_dim": 384
         },
-        "total_bs": int(14*world_size), #int(28*num_gpus),
+        "total_bs": int(6*world_size), #int(28*num_gpus),
         "step_per_update": 1,
         "max_epoch": 800,
         "consider_metric": "CDL2",

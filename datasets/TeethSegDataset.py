@@ -98,14 +98,14 @@ class TeethSeg(data.Dataset):
 
         for dc in self.dataset_categories:
             print_log('Collecting files of Taxonomy [ID=%s, Name=%s]' % (dc['taxonomy_id'], dc['taxonomy_name']), logger='PCNDATASET')
-            samples = dc[subset]
+            self.samples = dc[subset]
 
             jawtype = dc['taxonomy_name'].split('_')[0]
             toothrange = dc['taxonomy_name'].split('_')[1]
 
             if self.gt_type == 'full':
                 # full GT
-                for s in samples:
+                for s in self.samples:
                     
                     file_list.append({
                         'taxonomy_id':  dc['taxonomy_id'],
@@ -118,7 +118,7 @@ class TeethSeg(data.Dataset):
                     })
             elif self.gt_type == 'single':
                 # single GT
-                for s in samples:
+                for s in self.samples:
                     for tooth in self.category_dict[dc['taxonomy_name']]:
                         file_list.append({
                             'taxonomy_id':  dc['taxonomy_id'],

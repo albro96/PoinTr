@@ -19,9 +19,9 @@ from tools import builder
 from tools.inference import inference_single
 from datasets.TeethSegDataset import TeethSeg
 
-model_name = '240115_PoinTr_lower_1-7--all-corr-4096_gt-single-2048_denseloss-400_CDL2_sample2048'
+model_name = '240117_PoinTr_lower_1-7--all-corr-8192_gt-single-4096_denseloss'
 
-ckpt_types = ['ckpt-best', 'ckpt-last'] #
+ckpt_types = ['ckpt-epoch-100'] #
 
 for ckpt_type in ckpt_types:
 
