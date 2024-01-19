@@ -151,3 +151,4 @@ inference_result/
 
 # bra
 .local/
+/wandb

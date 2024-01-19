@@ -8,8 +8,7 @@ from pathlib import Path
 import torch
 import shutil
 
-# sys.path.append('/storage/share/code/01_scripts/modules/')
-
+sys.path.append('/storage/share/code/01_scripts/modules/')
 from os_tools.import_dir_path import import_dir_path
 
 pada = import_dir_path()
@@ -21,7 +20,7 @@ from datasets.TeethSegDataset import TeethSeg
 
 model_name = '240117_PoinTr_lower_1-7--all-corr-8192_gt-single-4096_denseloss'
 
-ckpt_types = ['ckpt-epoch-100'] #
+ckpt_types = ['ckpt-epoch-100', 'ckpt-epoch-400', 'ckpt-epoch-800'] #
 
 for ckpt_type in ckpt_types:
 

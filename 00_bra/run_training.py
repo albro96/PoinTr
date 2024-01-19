@@ -11,6 +11,7 @@ import shutil
 from datetime import datetime
 from easydict import EasyDict
 import os.path as op
+import wandb
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(BASE_DIR, '../'))
@@ -33,7 +34,7 @@ def main(rank, world_size, param):
         "CATEGORY_FILE_PATH": "/storage/share/data/3d-datasets/3DTeethSeg22/categories/TeethSeg.json",
         "N_POINTS_GT": 4096,
         "N_POINTS_PARTIAL": 8192, # 2048 4096 8192 16384
-        "CATEGORY_DICT": {'lower_1-7': 'all'}, # 'all' or list of tooth numbers as strings ["36"]
+        "CATEGORY_DICT": param, #{'lower_1-7': 'all'}, # 'all' or list of tooth numbers as strings ["36"]
         "GT_TYPE": "single",
         "CORR_TYPE": "corr", # "corr" or "corr-concat" for concat select n_points_partial per tooth
         "DATA_DIR": "/storage/share/nobackup/data/3DTeethSeg22/data/",
@@ -41,7 +42,7 @@ def main(rank, world_size, param):
         "SAMPLING_METHOD": 'None', # 'None' 'RandomSamplePoints', 'FurthestPointSample'
     })
 
-    suffix = f'denseloss-{int(param*1000)}_CDL2_sample2048'
+    suffix = f'_CDL2'
 
     if not suffix.startswith('_') and suffix != '':
         suffix = '_' + suffix
@@ -88,6 +89,7 @@ def main(rank, world_size, param):
         'start_ckpts': None,
         'ckpts': None,
         'val_freq': 1,
+        'test_freq': 100,
         'resume': False,
         'test': False,
         'mode': None,
@@ -220,9 +222,9 @@ def main(rank, world_size, param):
         },
         "total_bs": int(6*world_size), #int(28*num_gpus),
         "step_per_update": 1,
-        "max_epoch": 800,
+        "max_epoch": 2000,
         "consider_metric": "CDL2",
-        "dense_loss_coeff": param,
+        "dense_loss_coeff": 1.0,
     }
 
     network_config = network_config_dict[network_type]
@@ -322,6 +324,38 @@ def main(rank, world_size, param):
     if args.distributed:
         assert args.local_rank == torch.distributed.get_rank() 
 
+    wandb.init(
+        # set the wandb project where this run will be logged
+        project="PoinTr",
+        # track hyperparameters and run metadata
+        config=config,
+        name=args.exp_name,
+        dir=args.experiment_path,
+        id=args.exp_name,
+        resume=args.resume,
+        save_code=True,
+    )
+
+    # define our custom x axis metric
+    wandb.define_metric("train/epoch")
+    wandb.define_metric("val/epoch")
+    wandb.define_metric("test/epoch")
+
+    # set all other train/ metrics to use this step
+
+    wandb.define_metric("train/*", step_metric="train/epoch")
+    wandb.define_metric("val/*", step_metric="val/epoch")
+    wandb.define_metric("test/*", step_metric="test/epoch")
+
+    wandb.define_metric("val/CDL1", summary="min", step_metric="val/epoch")
+    wandb.define_metric("val/CDL2", summary="min", step_metric="val/epoch")
+    wandb.define_metric("val/EMDistance", summary="min", step_metric="val/epoch")
+    wandb.define_metric("test/CDL1", summary="min", step_metric="test/epoch")
+    wandb.define_metric("test/CDL2", summary="min", step_metric="test/epoch")
+    wandb.define_metric("test/EMDistance", summary="min", step_metric="test/epoch")
+    wandb.define_metric("train/dense_loss", summary="min", step_metric="train/epoch")
+    wandb.define_metric("train/sparse_loss", summary="min", step_metric="train/epoch")
+
     # run
     if args.test:
         test_net(args, config)
@@ -329,24 +363,27 @@ def main(rank, world_size, param):
         run_net(args, config, train_writer, val_writer)
 
 
-
 if __name__ == '__main__':
     # User Input
     num_gpus = 1 # number of gpus
 
-    for param in [1.0]:
+    params = [
+        {'lower_1-7': 'all'},
+        {'lower_1-3': 'all'},
+        {'lower_35-37': ['36']},
+        {'lower_1-7': ['36', '46']},
+    ]
+    param = params[0]
 
-        print(param)
+    print('Number of GPUs: ', num_gpus)
 
-        print('Number of GPUs: ', num_gpus)
-
-        if num_gpus > 1:
-            os.environ['MASTER_ADDR'] = 'localhost'
-            os.environ['MASTER_PORT'] = '12345'  # Set any free port
-            os.environ['WORLD_SIZE'] = str(num_gpus)
-            mp.spawn(main, args=(num_gpus, param), nprocs=num_gpus, join=True)
-        else:
-            
-            main(rank=0, world_size=1, param=param)
+    if num_gpus > 1:
+        os.environ['MASTER_ADDR'] = 'localhost'
+        os.environ['MASTER_PORT'] = '12345'  # Set any free port
+        os.environ['WORLD_SIZE'] = str(num_gpus)
+        mp.spawn(main, args=(num_gpus, param), nprocs=num_gpus, join=True)
+    else:
+        
+        main(rank=0, world_size=1, param=param)
 
     # mp.spawn(main, args=(num_gpus,), nprocs=num_gpus, join=True)

@@ -9,25 +9,12 @@ from utils.logger import *
 from utils.AverageMeter import AverageMeter
 from utils.metrics import Metrics
 from extensions.chamfer_dist import ChamferDistanceL1, ChamferDistanceL2
+import sys
+import wandb
+from easydict import EasyDict
 
-# put somewhere else
-def format_duration(seconds):
-    minutes, seconds = divmod(seconds, 60)
-    hours, minutes = divmod(minutes, 60)
-    days, hours = divmod(hours, 24)
-
-    # Python
-    if days > 0:
-        return f"{int(days):02d}:{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d} (dd:hh:mm:ss)"
-
-    if hours > 0:
-        return f"{int(hours):02d}:{int(minutes):02d}:{int(seconds):02d} (hh:mm:ss)"
-
-    if minutes > 0:
-        return f"{int(minutes):02d}:{int(seconds):02d} (mm:ss)"
-
-    return f"{int(seconds):02d} (s)"
-
+sys.path.append('/storage/share/code/01_scripts/modules/')
+from general_tools.format import format_duration
 
 def run_net(args, config, train_writer=None, val_writer=None):
     logger = get_logger(args.log_name)
@@ -54,19 +41,19 @@ def run_net(args, config, train_writer=None, val_writer=None):
         builder.load_model(base_model, args.start_ckpts, logger = logger)
 
     # print model info
-    print_log('Trainable_parameters:', logger = logger)
-    print_log('=' * 25, logger = logger)
-    for name, param in base_model.named_parameters():
-        if param.requires_grad:
-            print_log(name, logger=logger)
-    print_log('=' * 25, logger = logger)
+    # print_log('Trainable_parameters:', logger = logger)
+    # print_log('=' * 25, logger = logger)
+    # for name, param in base_model.named_parameters():
+    #     if param.requires_grad:
+            # print_log(name, logger=logger)
+    # print_log('=' * 25, logger = logger)
     
-    print_log('Untrainable_parameters:', logger = logger)
-    print_log('=' * 25, logger = logger)
-    for name, param in base_model.named_parameters():
-        if not param.requires_grad:
-            print_log(name, logger=logger)
-    print_log('=' * 25, logger = logger)
+    # print_log('Untrainable_parameters:', logger = logger)
+    # print_log('=' * 25, logger = logger)
+    # for name, param in base_model.named_parameters():
+    #     if not param.requires_grad:
+    #         print_log(name, logger=logger)
+    # print_log('=' * 25, logger = logger)
 
     # DDP
     if args.distributed:
@@ -91,6 +78,8 @@ def run_net(args, config, train_writer=None, val_writer=None):
     if args.resume:
         builder.resume_optimizer(optimizer, args, logger = logger)
     scheduler = builder.build_scheduler(base_model, optimizer, config, last_epoch=start_epoch-1)
+
+    wandb.watch(base_model)
 
     # trainval
     # training
@@ -197,6 +186,8 @@ def run_net(args, config, train_writer=None, val_writer=None):
             train_writer.add_scalar('Loss/Epoch/Sparse', losses.avg(0), epoch)
             train_writer.add_scalar('Loss/Epoch/Dense', losses.avg(1), epoch)
 
+
+            
         
 
         if epoch % args.val_freq == 0:
@@ -204,9 +195,17 @@ def run_net(args, config, train_writer=None, val_writer=None):
             metrics = validate(base_model, test_dataloader, epoch, ChamferDisL1, ChamferDisL2, val_writer, args, config, logger=logger)
 
             # Save ckeckpoints
-            if  metrics.better_than(best_metrics):
+            if metrics.better_than(best_metrics):
                 best_metrics = metrics
                 builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, 'ckpt-best', args, logger = logger)
+
+        if epoch % args.test_freq == 0:
+
+            # Validate the current model
+            _, test_dataloader = builder.dataset_builder(args, config.dataset.test)
+            metrics = test(base_model, test_dataloader, ChamferDisL1, ChamferDisL2, args, config, logger=logger, epoch=epoch)
+
+            
 
         builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, 'ckpt-last', args, logger = logger)  
         # save every 100 epoch
@@ -226,6 +225,14 @@ def run_net(args, config, train_writer=None, val_writer=None):
         
     
         print_log(f'[Training] EPOCH: {epoch}/{config.max_epoch} EpochTime = {format_duration(epoch_time_list[-1])} Remaining Time = {format_duration(est_time)} Losses = {["%.4f" % l for l in losses.avg()]} \n' , logger = logger)
+
+        wandb.log(
+            {
+                "train/epoch": epoch,
+                "train/sparse_loss": losses.avg(0),
+                "train/dense_loss": losses.avg(1), 
+            })
+        
 
     if train_writer is not None and val_writer is not None:
         train_writer.close()
@@ -314,14 +321,15 @@ def validate(base_model, test_dataloader, epoch, ChamferDisL1, ChamferDisL2, val
             #     gt_ptcloud_img = misc.get_ptcloud_img(gt_ptcloud)
             #     val_writer.add_image('Model%02d/DenseGT' % idx, gt_ptcloud_img, epoch, dataformats='HWC')
         
-            if (idx+1) % interval == 0:
-                print_log('Test[%d/%d] Taxonomy = %s Sample = %s Losses = %s Metrics = %s' %
-                            (idx + 1, n_samples, taxonomy_id, model_id, ['%.4f' % l for l in test_losses.val()], 
-                            ['%.4f' % m for m in _metrics]), logger=logger)
+            # if (idx+1) % interval == 0:
+            #     print_log('Test[%d/%d] Taxonomy = %s Sample = %s Losses = %s Metrics = %s' %
+            #                 (idx + 1, n_samples, taxonomy_id, model_id, ['%.4f' % l for l in test_losses.val()], 
+            #                 ['%.4f' % m for m in _metrics]), logger=logger)
         for _,v in category_metrics.items():
             test_metrics.update(v.avg())
-        print_log('[Validation] EPOCH: %d  Metrics = %s' % (epoch, ['%.4f' % m for m in test_metrics.avg()]), logger=logger)
 
+        print_log('[Validation] EPOCH: %d  Metrics = %s' % (epoch, ['%.4f' % m for m in test_metrics.avg()]), logger=logger)
+        
         if args.distributed:
             torch.cuda.synchronize()
      
@@ -329,7 +337,15 @@ def validate(base_model, test_dataloader, epoch, ChamferDisL1, ChamferDisL2, val
     # shapenet_dict = json.load(open('./data/shapenet_synset_dict.json', 'r'))
     category_dict = json.load(open('/storage/share/data/3d-datasets/3DTeethSeg22/categories/category_dict.json', 'r'))
     
-    print_log('============================ TEST RESULTS ============================',logger=logger)
+    print_log('============================ VAL RESULTS ============================',logger=logger)
+
+    log_dict = {'val/epoch': epoch}
+    for metric, value in zip(test_metrics.items, test_metrics.avg()):
+        log_dict[f"val/{metric}"] = value
+
+    wandb.log(log_dict)
+
+
     msg = ''
     msg += 'Taxonomy\t'
     msg += '#Sample\t'
@@ -390,7 +406,7 @@ def test_net(args, config):
 
     test(base_model, test_dataloader, ChamferDisL1, ChamferDisL2, args, config, logger=logger)
 
-def test(base_model, test_dataloader, ChamferDisL1, ChamferDisL2, args, config, logger = None):
+def test(base_model, test_dataloader, ChamferDisL1, ChamferDisL2, args, config, logger = None, epoch=None):
 
     base_model.eval()  # set model to eval mode
 
@@ -428,6 +444,7 @@ def test(base_model, test_dataloader, ChamferDisL1, ChamferDisL2, args, config, 
                 if taxonomy_id not in category_metrics:
                     category_metrics[taxonomy_id] = AverageMeter(Metrics.names())
                 category_metrics[taxonomy_id].update(_metrics)
+
             elif dataset_name == 'TeethSeg':
                 partial = data[0].cuda()
                 gt = data[1].cuda()
@@ -444,7 +461,7 @@ def test(base_model, test_dataloader, ChamferDisL1, ChamferDisL2, args, config, 
 
                 test_losses.update([sparse_loss_l1.item() * 1000, sparse_loss_l2.item() * 1000, dense_loss_l1.item() * 1000, dense_loss_l2.item() * 1000])
 
-                _metrics = Metrics.get(dense_points, gt, require_emd=True)
+                _metrics = Metrics.get(dense_points, gt, require_emd=False)
                 # test_metrics.update(_metrics)
 
                 if taxonomy_id not in category_metrics:
@@ -496,15 +513,18 @@ def test(base_model, test_dataloader, ChamferDisL1, ChamferDisL2, args, config, 
             else:
                 raise NotImplementedError(f'Train phase do not support {dataset_name}')
 
-            if (idx+1) % 200 == 0:
-                print_log('Test[%d/%d] Taxonomy = %s Sample = %s Losses = %s Metrics = %s' %
-                            (idx + 1, n_samples, taxonomy_id, model_id, ['%.4f' % l for l in test_losses.val()], 
-                            ['%.4f' % m for m in _metrics]), logger=logger)
+            # if (idx+1) % 200 == 0:
+            #     print_log('Test[%d/%d] Taxonomy = %s Sample = %s Losses = %s Metrics = %s' %
+            #                 (idx + 1, n_samples, taxonomy_id, model_id, ['%.4f' % l for l in test_losses.val()], 
+            #                 ['%.4f' % m for m in _metrics]), logger=logger)
         if dataset_name == 'KITTI':
             return
         for _,v in category_metrics.items():
             test_metrics.update(v.avg())
-        print_log('[TEST] Metrics = %s' % (['%.4f' % m for m in test_metrics.avg()]), logger=logger)
+        # print_log('[TEST] Metrics = %s' % (['%.4f' % m for m in test_metrics.avg()]), logger=logger)
+
+
+        
 
      
 
@@ -513,9 +533,18 @@ def test(base_model, test_dataloader, ChamferDisL1, ChamferDisL2, args, config, 
     category_dict = json.load(open('/storage/share/data/3d-datasets/3DTeethSeg22/categories/category_dict.json', 'r'))
 
     print_log('============================ TEST RESULTS ============================',logger=logger)
+
+    log_dict = {'test/epoch': epoch}
+    for metric, value in zip(test_metrics.items, test_metrics.avg()):
+        log_dict[f"test/{metric}"] = value
+
+    wandb.log(log_dict)
+
+
     msg = ''
     msg += 'Taxonomy\t'
     msg += '#Sample\t'
+
     for metric in test_metrics.items:
         msg += metric + '\t'
     msg += '#ModelName\t'
@@ -528,6 +557,7 @@ def test(base_model, test_dataloader, ChamferDisL1, ChamferDisL2, args, config, 
         msg += (str(category_metrics[taxonomy_id].count(0)) + '\t')
         for value in category_metrics[taxonomy_id].avg():
             msg += '%.3f \t' % value
+
         msg +=  category_dict[taxonomy_id] + '\t'
         print_log(msg, logger=logger)
 
