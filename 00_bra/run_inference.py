@@ -7,6 +7,7 @@ from easydict import EasyDict
 from pathlib import Path
 import torch
 import shutil
+import time
 
 sys.path.append('/storage/share/code/01_scripts/modules/')
 from os_tools.import_dir_path import import_dir_path
@@ -18,9 +19,9 @@ from tools import builder
 from tools.inference import inference_single
 from datasets.TeethSegDataset import TeethSeg
 
-model_name = '240117_PoinTr_lower_1-7--all-corr-8192_gt-single-4096_denseloss'
+model_name = '240119_PoinTr_lower_1-3--all-corr-8192_gt-single-4096_CDL2'
 
-ckpt_types = ['ckpt-epoch-100', 'ckpt-epoch-400', 'ckpt-epoch-800'] #
+ckpt_types = ['ckpt-epoch-1900'] #
 
 for ckpt_type in ckpt_types:
 
@@ -145,7 +146,7 @@ for ckpt_type in ckpt_types:
 
                 # split the path into parts
                 filename = f'{patient}_corr-{jaw}-{toothrange}_recon-{tooth}_npoints-{data_config.N_POINTS}'
-
+                t0 = time.time()
                 inference_single(
                     model = base_model, 
                     pc_path = corr_file, 
@@ -155,6 +156,7 @@ for ckpt_type in ckpt_types:
                     filename=filename,
                     data_config = data_config
                     )
+                print(f'{filename} done in {time.time()-t0:.2f} s')
         else:
             print(f'Files for {args.cfg_name} already exist.')
             
