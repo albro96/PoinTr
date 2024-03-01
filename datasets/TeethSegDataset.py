@@ -24,6 +24,7 @@ from general_tools.format import format_duration
 # import data_transforms
 from hashlib import sha256
 
+import copy
 import torch
 from torch.utils.data import Dataset
 import numpy as np
@@ -70,12 +71,12 @@ class TeethSegDataset(Dataset):
             print('Using CPU. This will slow down the data loading process. Consider using CUDA.')
 
         # USER INPUT
-        self.jaw = jaw
-        self.tooth_range = tooth_range if tooth_range is not None else {'corr': '1-7', 'gt': '1-7', 'quadrants': 'all'}
+        self.tooth_range = tooth_range if tooth_range is not None else {'corr': '1-7', 'gt': '1-7', 'jaw': 'lower','quadrants': 'all'}
         self.num_points_gt = num_points_gt
         self.num_points_corr = num_points_corr
         self.num_points_orig = num_points_orig
         self.gt_type = gt_type
+        assert self.gt_type in ['single', 'full'], "Single tooth or fullband ground truth is supported."
         self.mode = mode
         self.splits = {'train': 0.8,'val': 0.1, 'test': 0.1} if splits is None else splits
 
@@ -90,7 +91,7 @@ class TeethSegDataset(Dataset):
         self.quad_dict = dict(lower=[3,4], upper=[1,2])
 
         if self.tooth_range['quadrants'] == 'all':
-            self.tooth_range['quadrants'] = self.quad_dict[self.jaw]
+            self.tooth_range['quadrants'] = self.quad_dict[self.tooth_range['jaw']]
 
 
         self.toothlist = {}
@@ -100,7 +101,6 @@ class TeethSegDataset(Dataset):
 
             range_type = key
             tooth_range = self.tooth_range[range_type]
-            print(tooth_range)
 
             if range_type == 'quadrants':
                 continue
@@ -110,16 +110,26 @@ class TeethSegDataset(Dataset):
                     self.tooth_range[range_type] = [int(tooth_range[0]), int(tooth_range[-1])]
                     self.toothlist[range_type] = []
                     for quadrant in self.tooth_range['quadrants']:
-                        assert quadrant in self.quad_dict[self.jaw]
+                        assert quadrant in self.quad_dict[self.tooth_range['jaw']]
                         self.toothlist[range_type].extend([int(f'{quadrant}{tooth}') for tooth in range(self.tooth_range[range_type][0], self.tooth_range[range_type][-1]+1)])
                 else:
                     self.toothlist[range_type] = []
-                    tooth_range_init = tooth_range.copy()
+                    tooth_range_init = copy.deepcopy(tooth_range)
                     # check if all elements are smaller than 10
-                    if all([tooth < 10 for tooth in tooth_range]):
-                        for quadrant in self.tooth_range['quadrants']:
-                            assert quadrant in self.quad_dict[self.jaw]
-                            self.toothlist[range_type].extend([int(f'{quadrant}{tooth}') for tooth in tooth_range_init])
+                    for tooth in tooth_range_init:
+                        
+                        if tooth < 10:
+                            for quadrant in self.tooth_range['quadrants']:
+                                assert quadrant in self.quad_dict[self.tooth_range['jaw']]
+                                self.toothlist[range_type].append(int(f'{quadrant}{tooth}'))
+                        else:
+                            self.toothlist[range_type].append(tooth)
+                        
+                    # make sure that self.toothlist[range_type] is sorted and unique
+                    self.toothlist[range_type] = sorted(list(set(self.toothlist[range_type])))
+
+        # print(self.toothlist)
+        print(f'Current toothlist: {self.toothlist}')
 
         # create data_filter list if it does not exist
         if not op.exists(self.data_filter_path):
@@ -148,13 +158,23 @@ class TeethSegDataset(Dataset):
         self.num_samples = len(self.patient_tooth_list)
         print(f'Number of samples: {self.num_samples}')
 
+        # Calculate the indices where to split the array
+        splitnums = {'train': 0, 'val': 1, 'test': 2}
+
+        train_index = int(self.num_samples*self.splits['train'])
+        val_index = train_index + int(self.num_samples*self.splits['val'])
+
+        patientlist_split = np.split(np.array(self.patient_tooth_list), [train_index, val_index])
+        self.patient_tooth_list = patientlist_split[splitnums[self.mode]].tolist()
+    
         if self.enable_cache:
             cache_len = self.num_samples
 
             # create hash for cache
-            relevant_keys = ['jaw', 'quadrants', 'toothlist', 'num_points_gt', 'num_points_corr', 'num_points_orig', 'gt_type']
+            relevant_keys = ['toothlist', 'num_points_gt', 'num_points_corr', 'num_points_orig', 'gt_type']
 
             cache_dict = {key: value for key, value in self.__dict__.items() if key in relevant_keys}
+
             cache_dict['filterlist'] = sorted(self.filterlist)
 
             self.cache_hash = sha256(json.dumps(cache_dict, sort_keys=True).encode()).hexdigest()[:8]
@@ -182,24 +202,48 @@ class TeethSegDataset(Dataset):
                 print('Overwriting cache files...')
                 self.save_cache()
 
-        # Calculate the indices where to split the array
-        train_index = int(self.num_samples*self.splits['train'])
-        val_index = train_index + int(self.num_samples*self.splits['val'])
+            # Split the array
+            gt_split = np.split(self.shared_array_gt, [train_index, val_index])
+            corr_split = np.split(self.shared_array_corr, [train_index, val_index])
 
-        # Split the array
-        gt_split = np.split(self.shared_array_gt, [train_index, val_index])
-        corr_split = np.split(self.shared_array_corr, [train_index, val_index])
-        patientlist_split = np.split(np.array(self.patient_tooth_list), [train_index, val_index])
-
-        splitnums = {'train': 0, 'val': 1, 'test': 2}
-
-        self.shared_array_corr = corr_split[splitnums[self.mode]]
-        self.shared_array_gt = gt_split[splitnums[self.mode]]
-        self.patient_tooth_list = patientlist_split[splitnums[self.mode]].tolist()
+            self.shared_array_corr = corr_split[splitnums[self.mode]]
+            self.shared_array_gt = gt_split[splitnums[self.mode]]
+        
      
 
     def __len__(self):
         return len(self.patient_tooth_list)
+
+    def downsample_batched_pcd(self, pcd, num_points, samplingmethod='fps', steps=2):
+        '''
+        Downsamples the input data tensor to the specified number of points using the specified sampling method.
+        Args:
+            pcd (torch.Tensor): The input data tensor of shape (batch_size, num_points, 3).
+            num_points (int): The desired number of points after downsampling.
+            samplingmethod (str, optional): The sampling method to use. Defaults to 'fps'.
+            steps (int, optional): The number of downsampling steps to perform. Only 1 or 2 steps are supported. Defaults to 2.
+        Returns:
+            torch.Tensor: The downsampled data tensor of shape (batch_size, num_points, 3).
+        '''
+
+        assert steps in [1,2], "Only 1 or 2 steps are supported."
+
+        if steps == 2:
+            # first downsample each item to the same number of points, then downsample the whole batch
+            # this is about 4 times faster than downsampling the whole set at once
+
+            batchsize = pcd.shape[0]
+            num_points_tmp = torch.ones(batchsize)*num_points/batchsize
+            num_points_tmp = torch.ceil(num_points_tmp).int().to(self.device)
+
+            if samplingmethod == 'fps':
+                pcd = fps(pcd, K=num_points_tmp)[0].view(1,-1,3)
+
+        if samplingmethod == 'fps':
+            pcd = fps(pcd, K=num_points)[0]
+        
+        return pcd
+        
 
     def load_patient_data(self, patient, corr_tooth=None):
         # create paths
@@ -225,34 +269,32 @@ class TeethSegDataset(Dataset):
         indices_gt = np.where(np.isin(filter_arr, filter_arr_gt))[0]
 
         for tooth in self.toothlist['gt']:
-
             if corr_tooth is not None:
                 if tooth != corr_tooth:
                     continue
             
-            
             corr_tensor = gt[filter_arr != tooth]
-
-
-            # # downsample the whole set at once
-            # corr_tensor = corr_tensor.view(1,-1,3)
-            # corr_tensor_sampled = fps(corr_tensor, K=self.num_points_corr)[0].cpu()
-
-            # 2 step process: first downsample each downsamples GT tooth to the same number of points, then downsample the whole set
-            # this is about 4 times faster than downsampling the whole set at once
-            num_points_corr = torch.ones(len(self.toothlist['corr'])-1)*self.num_points_corr/(len(self.toothlist['corr'])-1)
-
-            num_points_corr = torch.ceil(num_points_corr).int().to(self.device)
-
-            corr_tensor_sampled = fps(corr_tensor, K=num_points_corr)[0].view(1,-1,3)
-            corr_tensor_sampled = fps(corr_tensor_sampled, K=self.num_points_corr)[0]
+            corr_tensor_sampled = self.downsample_batched_pcd(pcd=corr_tensor, num_points=self.num_points_corr, samplingmethod='fps', steps=2)
 
             corr = torch.cat((corr, corr_tensor_sampled), dim=0)
 
-        if corr_tooth is not None:
-            return gt.cpu()[filter_arr == corr_tooth].squeeze(0), corr.cpu().squeeze(0)
-        else:
-            return gt.cpu()[indices_gt], corr.cpu()
+        if self.gt_type == 'full':
+            gt = self.downsample_batched_pcd(pcd=gt, num_points=self.num_points_gt, samplingmethod='fps', steps=2)
+            gt = gt.repeat(corr.shape[0], 1, 1)
+
+        corr = corr.cpu()  
+        gt = gt.cpu()
+
+        if self.gt_type == 'single':
+            if corr_tooth is not None: 
+                return gt[filter_arr == corr_tooth].squeeze(0), corr.squeeze(0)
+            else: 
+                return gt[indices_gt], corr
+        else: 
+            if corr_tooth is not None: 
+                return gt.squeeze(0), corr.squeeze(0)
+            else:
+                return gt, corr
         
     def load_cache(self):
         # load cache     
@@ -265,8 +307,10 @@ class TeethSegDataset(Dataset):
         else:
             print('Loading data for cache ...')
             for idx, patient in enumerate(tqdm(self.filterlist)):
-                start = idx*len(self.toothlist['gt'])
-                end = start+len(self.toothlist['gt'])
+                idx_ref = len(self.toothlist['gt'])
+                start = idx*idx_ref 
+                end = start+idx_ref
+
                 gt, corr = self.load_patient_data(patient)
                 self.shared_array_gt[start:end] = gt
                 self.shared_array_corr[start:end] = corr        
@@ -282,7 +326,7 @@ class TeethSegDataset(Dataset):
         if self.enable_cache:
             return self.shared_array_gt[idx], self.shared_array_corr[idx]
         else:
-            return self.load_patient_data(patient, tooth)
+            return self.load_patient_data(patient, corr_tooth=int(tooth))
             
 
 if __name__ == '__main__':
@@ -290,46 +334,54 @@ if __name__ == '__main__':
     device = torch.device('cuda:0')
 
     tooth_ranges = [
-        {'corr': '1-7', 'gt': '1-7', 'quadrants': 'all'}
+        {'corr': '1-7', 'gt': [41,1], 'jaw': 'lower', 'quadrants': [3,4]},
     ]
     num_pts = [
-        {'gt': 4096, 'corr': 16384},
+        {'gt': 128, 'corr': 128},
+        # {'gt': 4096, 'corr': 16384},
     ]
 
     for tooth_range in tooth_ranges:
         for num_pt in num_pts:
+            # toothrange = copy.deepcopy(tooth_range)
+            # num_pt = copy.deepcopy(num_pt)
             # print(f'Loading dataset with tooth_range: {tooth_range} and num_points: {num_pt}')
             train_set = TeethSegDataset(
                 mode='train',
-                jaw='lower', 
                 tooth_range=tooth_range,
                 num_points_corr=num_pt['corr'],
                 num_points_gt=num_pt['gt'],
+                gt_type='full',
                 device=device,
                 splits={'train': 0.8, 'val': 0.1},
-                enable_cache=True,
+                enable_cache=False,
                 create_cache_file=True
             )
 
-    # import open3d as o3d
+    import open3d as o3d
+    from pcd_tools.visualizer import ObjectVisualizer
 
-    # train_loader = torch.utils.data.DataLoader(
-    #         train_set, 
-    #         batch_size=1,
-    #         shuffle=False, 
-    #         pin_memory=False,
-    #         num_workers=0)
+    train_loader = torch.utils.data.DataLoader(
+            train_set, 
+            batch_size=1,
+            shuffle=False, 
+            pin_memory=False,
+            num_workers=0)
 
-    # for epoch in range(2):
-    #     t0 = time.time()
-    #     for i, data in enumerate(train_loader):
-    #         # gt = data[0].to(device)
-    #         # corr = data[1].to(device)
-    #         print(data[0].shape, data[1].shape)
-    #         # pcd = o3d.geometry.PointCloud()
-    #         # pcd.points = o3d.utility.Vector3dVector(data[0][0])
-
-    #         # o3d.visualization.draw_geometries([pcd])
+    for epoch in range(1):
+        t0 = time.time()
+        for i, data in enumerate(train_loader):
+            # gt = data[0].to(device)
+            # corr = data[1].to(device)
+            print(data[0].shape, data[1].shape)
+            
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(data[0][0])
+            visu = ObjectVisualizer()
+            visu.load_obj(obj=pcd, dtype='pcd')
+            visu.show()
+            # visu.screenshot(save_path='/storage/share/nobackup/data/3DTeethSeg22/test.png')
+            break
 
     #         # visulist = []
     #         # for num in range(2):
