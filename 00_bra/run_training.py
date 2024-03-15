@@ -373,6 +373,7 @@ if __name__ == '__main__':
         {'lower_35-37': ['36']},
         {'lower_1-7': ['36', '46']},
     ]
+    
     param = params[0]
 
     print('Number of GPUs: ', num_gpus)

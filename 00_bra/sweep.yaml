@@ -1,0 +1,28 @@
+description: Sweep test
+
+program: wandb-sweep.py
+
+method: random
+
+metric:
+  name: loss
+  goal: minimize
+  
+parameters:
+  optimizer:
+    values: ['adam', 'sgd']
+  fc_layer_size:
+    values: [128, 256, 512]
+  dropout:
+    values: [0.3, 0.4, 0.5]
+  epochs:
+    value: 100
+  learning_rate:
+    distribution: uniform
+    min: 0
+    max: 0.1
+  batch_size:
+    distribution: q_log_uniform_values
+    q: 8
+    min: 32
+    max: 256

@@ -40,21 +40,6 @@ def run_net(args, config, train_writer=None, val_writer=None):
     elif args.start_ckpts is not None:
         builder.load_model(base_model, args.start_ckpts, logger = logger)
 
-    # print model info
-    # print_log('Trainable_parameters:', logger = logger)
-    # print_log('=' * 25, logger = logger)
-    # for name, param in base_model.named_parameters():
-    #     if param.requires_grad:
-            # print_log(name, logger=logger)
-    # print_log('=' * 25, logger = logger)
-    
-    # print_log('Untrainable_parameters:', logger = logger)
-    # print_log('=' * 25, logger = logger)
-    # for name, param in base_model.named_parameters():
-    #     if not param.requires_grad:
-    #         print_log(name, logger=logger)
-    # print_log('=' * 25, logger = logger)
-
     # DDP
     if args.distributed:
         # Sync BN
@@ -110,29 +95,15 @@ def run_net(args, config, train_writer=None, val_writer=None):
             data_time.update(time.time() - batch_start_time)
             npoints = config.dataset.train._base_.N_POINTS
             dataset_name = config.dataset.train._base_.NAME
-            if dataset_name == 'PCN' or dataset_name == 'Completion3D' or dataset_name == 'Projected_ShapeNet':
-                partial = data[0].cuda()
-                gt = data[1].cuda()
-                if config.dataset.train._base_.CARS:
-                    if idx == 0:
-                        print_log('padding while KITTI training', logger=logger)
-                    partial = misc.random_dropping(partial, epoch) # specially for KITTI finetune
-            elif dataset_name == 'TeethSeg':
-                partial = data[0].cuda()
-                gt = data[1].cuda()
-            elif dataset_name == 'ShapeNet':
-                gt = data.cuda()
-                partial, _ = misc.seprate_point_cloud(gt, npoints, [int(npoints * 1/4) , int(npoints * 3/4)], fixed_points = None)
-                partial = partial.cuda()
-            else:
-                raise NotImplementedError(f'Train phase do not support {dataset_name}')
+
+            partial = data[0].cuda()
+            gt = data[1].cuda()
 
             num_iter += 1
            
             with torch.cuda.amp.autocast(enabled=args.use_amp_autocast):
                 ret = base_model(partial)
-                sparse_loss, dense_loss = base_model.module.get_loss(ret, gt, epoch)
-         
+                sparse_loss, dense_loss = base_model.module.get_loss(ret, gt, epoch)    
             
             _loss = sparse_loss + config.get('dense_loss_coeff', 1)*dense_loss 
 
