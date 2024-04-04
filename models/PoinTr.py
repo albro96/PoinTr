@@ -6,6 +6,9 @@ from extensions.chamfer_dist import ChamferDistanceL1, ChamferDistanceL2
 from .Transformer import PCTransformer
 from .build import MODELS
 
+from pytorch3d.loss import chamfer_distance
+import os
+
 
 def fps(pc, num):
     fps_idx = pointnet2_utils.furthest_point_sample(pc, num) 
@@ -22,7 +25,9 @@ class Fold(nn.Module):
 
         a = torch.linspace(-1., 1., steps=step, dtype=torch.float).view(1, step).expand(step, step).reshape(1, -1)
         b = torch.linspace(-1., 1., steps=step, dtype=torch.float).view(step, 1).expand(step, step).reshape(1, -1)
-        self.folding_seed = torch.cat([a, b], dim=0).cuda()
+        # self.folding_seed = torch.cat([a, b], dim=0).cuda()
+        self.folding_seed = torch.cat([a, b], dim=0)
+
 
         self.folding1 = nn.Sequential(
             nn.Conv1d(in_channel + 2, hidden_dim, 1),
@@ -66,6 +71,7 @@ class PoinTr(nn.Module):
         self.num_pred = config.num_pred
         self.num_query = config.num_query
         self.gt_type = config.get('gt_type', 'full')
+        self.cd_norm = config.cd_norm
 
         self.fold_step = int(pow(self.num_pred//self.num_query, 0.5) + 0.5)
         self.base_model = PCTransformer(in_chans = 3, embed_dim = self.trans_dim, depth = [6, 8], drop_rate = 0., num_query = self.num_query, knn_layer = self.knn_layer)
@@ -79,15 +85,17 @@ class PoinTr(nn.Module):
             nn.Conv1d(1024, 1024, 1)
         )
         self.reduce_map = nn.Linear(self.trans_dim + 1027, self.trans_dim)
-        self.build_loss_func()
+        # self.build_loss_func()
 
-    def build_loss_func(self):
+    # def build_loss_func(self):
         # self.loss_func = ChamferDistanceL1()
-        self.loss_func = ChamferDistanceL2()
+        # self.loss_func = ChamferDistanceL2()
 
     def get_loss(self, ret, gt, epoch=0):
-        loss_coarse = self.loss_func(ret[0], gt)
-        loss_fine = self.loss_func(ret[1], gt)
+        # loss_coarse = self.loss_func(ret[0], gt)
+        # loss_fine = self.loss_func(ret[1], gt)
+        loss_coarse = chamfer_distance(ret[0], gt, norm=self.cd_norm)[0]
+        loss_fine = chamfer_distance(ret[1], gt, norm=self.cd_norm)[0]
         return loss_coarse, loss_fine
 
     def forward(self, xyz):

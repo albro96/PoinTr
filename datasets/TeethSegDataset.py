@@ -41,13 +41,14 @@ class TeethSegDataset(Dataset):
     def __init__(
             self, 
             mode='train', 
-            jaw='lower', 
             tooth_range=None, 
             num_points_gt=1024, 
             num_points_corr=1024, 
             num_points_orig=8192,
             gt_type='single', 
             data_type='npy',
+            samplingmethod='fps',
+            downsample_steps=2,
             splits=None, 
             enable_cache=True, 
             create_cache_file=False,
@@ -63,6 +64,8 @@ class TeethSegDataset(Dataset):
         self.create_cache_file = create_cache_file
         self.overwrite_cache_file = overwrite_cache_file
         self.data_type = data_type
+        self.samplingmethod = samplingmethod
+        self.downsample_steps = downsample_steps
         self.data_filter_path = pada.datasets.TeethSeg22.data_filter_path
         self.toothlabels_path = pada.datasets.TeethSeg22.toothlabels_path
         self.device = device if device is not None else torch.device('cpu')
@@ -71,7 +74,7 @@ class TeethSegDataset(Dataset):
             print('Using CPU. This will slow down the data loading process. Consider using CUDA.')
 
         # USER INPUT
-        self.tooth_range = tooth_range if tooth_range is not None else {'corr': '1-7', 'gt': '1-7', 'jaw': 'lower','quadrants': 'all'}
+        self.tooth_range = copy.deepcopy(tooth_range) if tooth_range is not None else {'corr': '1-7', 'gt': '1-7', 'jaw': 'lower','quadrants': 'all'}
         self.num_points_gt = num_points_gt
         self.num_points_corr = num_points_corr
         self.num_points_orig = num_points_orig
@@ -107,11 +110,19 @@ class TeethSegDataset(Dataset):
 
             if tooth_range != 'full':
                 if isinstance(tooth_range, str):
-                    self.tooth_range[range_type] = [int(tooth_range[0]), int(tooth_range[-1])]
+                    start = int(tooth_range.split('-')[0])
+                    end = int(tooth_range.split('-')[1])
+                    self.tooth_range[range_type] = [start, end]
                     self.toothlist[range_type] = []
-                    for quadrant in self.tooth_range['quadrants']:
-                        assert quadrant in self.quad_dict[self.tooth_range['jaw']]
-                        self.toothlist[range_type].extend([int(f'{quadrant}{tooth}') for tooth in range(self.tooth_range[range_type][0], self.tooth_range[range_type][-1]+1)])
+
+                    assert (start < 10)==(end < 10), "Tooth Range must be either as e.g. ."
+
+                    if start < 10:
+                        for quadrant in self.tooth_range['quadrants']:
+                            assert quadrant in self.quad_dict[self.tooth_range['jaw']]
+                            self.toothlist[range_type].extend([int(f'{quadrant}{tooth}') for tooth in range(self.tooth_range[range_type][0], self.tooth_range[range_type][-1]+1)])
+                    else:
+                        self.toothlist[range_type].extend([tooth for tooth in range(self.tooth_range[range_type][0], self.tooth_range[range_type][-1]+1)])
                 else:
                     self.toothlist[range_type] = []
                     tooth_range_init = copy.deepcopy(tooth_range)
@@ -214,7 +225,7 @@ class TeethSegDataset(Dataset):
     def __len__(self):
         return len(self.patient_tooth_list)
 
-    def downsample_batched_pcd(self, pcd, num_points, samplingmethod='fps', steps=2):
+    def downsample_batched_pcd(self, pcd, num_points, samplingmethod=None, steps=2):
         '''
         Downsamples the input data tensor to the specified number of points using the specified sampling method.
         Args:
@@ -225,6 +236,9 @@ class TeethSegDataset(Dataset):
         Returns:
             torch.Tensor: The downsampled data tensor of shape (batch_size, num_points, 3).
         '''
+
+        if samplingmethod is None:
+            samplingmethod = 'fps'
 
         assert steps in [1,2], "Only 1 or 2 steps are supported."
 
@@ -250,7 +264,7 @@ class TeethSegDataset(Dataset):
         all_teeth_tensor = torch.empty(0, self.num_points_orig, 3)
         # start = time.time()
         for tooth in self.toothlist['corr']:
-            pcd_path = op.join(self.data_dir, f'{self.data_type}_{self.num_points_orig}',patient, f"{tooth}.npy")
+            pcd_path = op.join(self.data_dir, f'{self.data_type}_{self.num_points_orig}',patient, f"{tooth}.{self.data_type}")
             tooth_tensor = torch.from_numpy(np.load(pcd_path)).unsqueeze(0)
             all_teeth_tensor = torch.cat((all_teeth_tensor, tooth_tensor), dim=0)
 
@@ -274,12 +288,12 @@ class TeethSegDataset(Dataset):
                     continue
             
             corr_tensor = gt[filter_arr != tooth]
-            corr_tensor_sampled = self.downsample_batched_pcd(pcd=corr_tensor, num_points=self.num_points_corr, samplingmethod='fps', steps=2)
+            corr_tensor_sampled = self.downsample_batched_pcd(pcd=corr_tensor, num_points=self.num_points_corr, samplingmethod=self.samplingmethod, steps=self.downsample_steps)
 
             corr = torch.cat((corr, corr_tensor_sampled), dim=0)
 
         if self.gt_type == 'full':
-            gt = self.downsample_batched_pcd(pcd=gt, num_points=self.num_points_gt, samplingmethod='fps', steps=2)
+            gt = self.downsample_batched_pcd(pcd=gt, num_points=self.num_points_gt, samplingmethod=self.samplingmethod, steps=self.downsample_steps)
             gt = gt.repeat(corr.shape[0], 1, 1)
 
         corr = corr.cpu()  
@@ -287,14 +301,14 @@ class TeethSegDataset(Dataset):
 
         if self.gt_type == 'single':
             if corr_tooth is not None: 
-                return gt[filter_arr == corr_tooth].squeeze(0), corr.squeeze(0)
+                return corr.squeeze(0), gt[filter_arr == corr_tooth].squeeze(0)
             else: 
-                return gt[indices_gt], corr
+                return corr, gt[indices_gt]
         else: 
             if corr_tooth is not None: 
-                return gt.squeeze(0), corr.squeeze(0)
+                return corr.squeeze(0), gt.squeeze(0) 
             else:
-                return gt, corr
+                return corr, gt, 
         
     def load_cache(self):
         # load cache     
@@ -311,7 +325,7 @@ class TeethSegDataset(Dataset):
                 start = idx*idx_ref 
                 end = start+idx_ref
 
-                gt, corr = self.load_patient_data(patient)
+                corr, gt = self.load_patient_data(patient)
                 self.shared_array_gt[start:end] = gt
                 self.shared_array_corr[start:end] = corr        
 
@@ -324,7 +338,7 @@ class TeethSegDataset(Dataset):
     def __getitem__(self, idx):
         patient, tooth = self.patient_tooth_list[idx]
         if self.enable_cache:
-            return self.shared_array_gt[idx], self.shared_array_corr[idx]
+            return self.shared_array_corr[idx], self.shared_array_gt[idx]
         else:
             return self.load_patient_data(patient, corr_tooth=int(tooth))
             

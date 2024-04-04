@@ -11,6 +11,7 @@ import torch
 from extensions.chamfer_dist import ChamferDistanceL1, ChamferDistanceL2
 import os
 from extensions.emd import emd_module as emd
+from pytorch3d.loss import chamfer_distance
 
 class Metrics(object):
     ITEMS = [{
@@ -23,14 +24,14 @@ class Metrics(object):
         'name': 'CDL1',
         'enabled': True,
         'eval_func': 'cls._get_chamfer_distancel1',
-        'eval_object': ChamferDistanceL1(ignore_zeros=True),
+        'eval_object': None,
         'is_greater_better': False,
         'init_value': 32767
     }, {
         'name': 'CDL2',
         'enabled': True,
         'eval_func': 'cls._get_chamfer_distancel2',
-        'eval_object': ChamferDistanceL2(ignore_zeros=True),
+        'eval_object': None,
         'is_greater_better': False,
         'init_value': 32767
     }, {
@@ -100,13 +101,13 @@ class Metrics(object):
 
     @classmethod
     def _get_chamfer_distancel1(cls, pred, gt):
-        chamfer_distance = cls.ITEMS[1]['eval_object']
-        return chamfer_distance(pred, gt) * 1000
+        # chamfer_distance = cls.ITEMS[1]['eval_object']
+        return chamfer_distance(pred, gt, norm=1)[0] * 1000
 
     @classmethod
     def _get_chamfer_distancel2(cls, pred, gt):
-        chamfer_distance = cls.ITEMS[2]['eval_object']
-        return chamfer_distance(pred, gt) * 1000
+        # chamfer_distance = cls.ITEMS[2]['eval_object']
+        return chamfer_distance(pred, gt, norm=2)[0] * 1000
 
     @classmethod
     def _get_emd_distance(cls, pred, gt, eps=0.005, iterations=100):

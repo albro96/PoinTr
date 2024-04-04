@@ -11,25 +11,32 @@ from models import build_model_from_cfg
 from utils.logger import *
 from utils.misc import *
 
-def dataset_builder(args, config):
-    dataset = build_dataset_from_cfg(config._base_, config.others)
-    shuffle = config.others.subset == 'train'
+def dataset_builder(args, config, mode, bs):
+    from datasets.TeethSegDataset import TeethSegDataset
+    
+    # dataset = build_dataset_from_cfg(config)
+    dataset = TeethSegDataset(**config, mode=mode, device=args.device)
+
+    print(dataset)
+
+    shuffle = mode == 'train'
+    drop_last = mode == 'train'
+
     if args.distributed:
-        sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle = shuffle)
-        dataloader = torch.utils.data.DataLoader(dataset, batch_size = config.others.bs if shuffle else 1,
-                                            num_workers = int(args.num_workers),
-                                            drop_last = config.others.subset == 'train',
-                                            worker_init_fn = worker_init_fn,
-                                            sampler = sampler,
-                                            pin_memory = True)
+        sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=shuffle)
     else:
         sampler = None
-        dataloader = torch.utils.data.DataLoader(dataset, batch_size=config.others.bs if shuffle else 1,
-                                                shuffle = shuffle, 
-                                                drop_last = config.others.subset == 'train',
-                                                num_workers = int(args.num_workers),
-                                                worker_init_fn=worker_init_fn,
-                                                pin_memory = True)
+
+    dataloader = torch.utils.data.DataLoader(
+        dataset, 
+        batch_size = bs,
+        num_workers = int(args.num_workers),
+        drop_last = drop_last,
+        worker_init_fn = worker_init_fn,
+        sampler = sampler,
+        pin_memory = True
+        )
+
     return sampler, dataloader
 
 def model_builder(config):
