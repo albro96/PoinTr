@@ -167,7 +167,7 @@ class TeethSegDataset(Dataset):
                 self.patient_tooth_list.append([patient, tooth])
 
         self.num_samples = len(self.patient_tooth_list)
-        print(f'Number of samples: {self.num_samples}')
+        print(f'Number of samples [total]: {self.num_samples}')
 
         # Calculate the indices where to split the array
         splitnums = {'train': 0, 'val': 1, 'test': 2}
@@ -177,6 +177,7 @@ class TeethSegDataset(Dataset):
 
         patientlist_split = np.split(np.array(self.patient_tooth_list), [train_index, val_index])
         self.patient_tooth_list = patientlist_split[splitnums[self.mode]].tolist()
+        print(f'Number of samples [{self.mode}]: {len(self.patient_tooth_list)}')
     
         if self.enable_cache:
             cache_len = self.num_samples

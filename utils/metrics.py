@@ -34,28 +34,43 @@ class Metrics(object):
         'eval_object': None,
         'is_greater_better': False,
         'init_value': 32767
-    }, {
-        'name': 'EMDistance',
-        'enabled': True,
-        'eval_func': 'cls._get_emd_distance',
-        'eval_object': emd.emdModule(),
-        'is_greater_better': False,
-        'init_value': 32767
     }]
+    # , {
+    #     'name': 'EMDistance',
+    #     'enabled': True,
+    #     'eval_func': 'cls._get_emd_distance',
+    #     'eval_object': emd.emdModule(),
+    #     'is_greater_better': False,
+    #     'init_value': 32767
+    # }]
 
+    # @classmethod
+    # def get(cls, pred, gt, require_emd=False):
+    #     _items = cls.items()
+    #     _values = [0] * len(_items)
+    #     for i, item in enumerate(_items):
+    #         if not require_emd and 'emd' in item['eval_func']:
+    #             _values[i] = torch.tensor(0.).to(gt.device)
+    #         else:
+    #             eval_func = eval(item['eval_func'])
+    #             _values[i] = eval_func(pred, gt)
+
+    #     return _values
+    
     @classmethod
-    def get(cls, pred, gt, require_emd=False):
+    def get(cls, pred, gt, partial):
         _items = cls.items()
         _values = [0] * len(_items)
         for i, item in enumerate(_items):
-            if not require_emd and 'emd' in item['eval_func']:
-                _values[i] = torch.tensor(0.).to(gt.device)
+            eval_func = eval(item['eval_func'])
+            if 'f_score' in item['eval_func']:
+                full_pred = torch.concatenate([pred, partial], dim=1)
+                full_gt = torch.concatenate([gt, partial], dim=1)
+                _values[i] = eval_func(full_pred, full_gt)
             else:
-                eval_func = eval(item['eval_func'])
                 _values[i] = eval_func(pred, gt)
-
         return _values
-
+    
     @classmethod
     def items(cls):
         return [i for i in cls.ITEMS if i['enabled']]
@@ -102,19 +117,19 @@ class Metrics(object):
     @classmethod
     def _get_chamfer_distancel1(cls, pred, gt):
         # chamfer_distance = cls.ITEMS[1]['eval_object']
-        return chamfer_distance(pred, gt, norm=1)[0] * 1000
+        return chamfer_distance(pred, gt, norm=1)[0] * 1
 
     @classmethod
     def _get_chamfer_distancel2(cls, pred, gt):
         # chamfer_distance = cls.ITEMS[2]['eval_object']
-        return chamfer_distance(pred, gt, norm=2)[0] * 1000
+        return chamfer_distance(pred, gt, norm=2)[0] * 1
 
     @classmethod
     def _get_emd_distance(cls, pred, gt, eps=0.005, iterations=100):
         emd_loss = cls.ITEMS[3]['eval_object']
         dist, _ = emd_loss(pred, gt, eps, iterations)
         emd_out = torch.mean(torch.sqrt(dist))
-        return emd_out * 1000
+        return emd_out * 1
 
     def __init__(self, metric_name, values):
         self._items = Metrics.items()

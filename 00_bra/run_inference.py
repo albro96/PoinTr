@@ -8,6 +8,7 @@ from pathlib import Path
 import torch
 import shutil
 import time
+import open3d as o3d
 
 sys.path.append('/storage/share/code/01_scripts/modules/')
 from os_tools.import_dir_path import import_dir_path
@@ -17,11 +18,12 @@ pada = import_dir_path()
 sys.path.append(pada.models.pointr.repo_dir)
 from tools import builder
 from tools.inference import inference_single
-from datasets.TeethSegDataset import TeethSeg
+from datasets.TeethSegDataset import TeethSegDataset
 
-model_name = '240119_PoinTr_lower_1-3--all-corr-8192_gt-single-4096_CDL2'
+model_name = '240405_PoinTr'
 
-ckpt_types = ['ckpt-epoch-1900'] #
+ckpt_types = ['ckpt-best'] #
+device = torch.device('cuda:0')
 
 for ckpt_type in ckpt_types:
 
@@ -29,21 +31,21 @@ for ckpt_type in ckpt_types:
         ckpt_type = Path(ckpt_type).stem
 
     model_dir = pada.models.pointr.model_dir
-    overwrite = False
+    overwrite = True
 
     model_args = []
 
     dataset_type = 'test'
 
+
     for dirpath, dirnames, filenames in os.walk(model_dir):
         for filename in filenames:
             if Path(filename).stem == ckpt_type:
                 args = EasyDict({
-                    'cfg_name': op.basename(dirpath),
-                    'model_config': op.join(dirpath, 'config.json'), 
+                    'cfg_name': op.basename(op.dirname(dirpath)),
+                    'model_config': op.join(op.dirname(dirpath), 'config', 'config.json'), 
                     'model_checkpoint': op.join(dirpath, filename),
-                    'pc_root': op.join(dirpath, 'inference', 'corr'),
-                    'out_pc_root': op.join(dirpath, 'inference'),
+                    'inference_dir': op.join(op.dirname(dirpath), 'inference'),
                     'device': 'cuda:0',
                     'save_vis_img': False,    
                     })
@@ -57,52 +59,23 @@ for ckpt_type in ckpt_types:
         with open(args.model_config, 'r') as f:
             config = EasyDict(json.load(f))
 
-        data_config = config.dataset.train._base_
+        data_config = config.dataset
 
-        dataset = TeethSeg(data_config, dataset_type)
-
-        file_list = dataset.file_list
-
-
-        partial_paths = []
-        for sample in file_list:
-            if type(sample['partial_path']) == list:
-                partial_paths.extend(sample['partial_path'])
-            else:
-                partial_paths.append(sample['partial_path'])
-
-
-        # with open(data_config.CATEGORY_FILE_PATH) as f:
-        #     dataset_categories = json.loads(f.read())   
-
-        # dataset_categories = [dc for dc in dataset_categories if dc['taxonomy_name'] in data_config.CATEGORY_DICT.keys()]
-
-        # file_list = []
-        # partial_paths = []
-        # for dc in dataset_categories:
-        #     samples = dc[dataset_type]
-        #     for s in samples:
-        #         file_list.append({
-        #             'taxonomy_id':  dc['taxonomy_id'],
-        #             'model_id':     s,
-        #             'partial_path': [data_config.PARTIAL_POINTS_PATH % ('/'.join(dc['taxonomy_name'].split('_')), data_config.N_POINTS_PARTIAL, s, tooth) for tooth in data_config.CATEGORY_DICT[dc['taxonomy_name']]],
-        #             'gt_path':      data_config.COMPLETE_POINTS_PATH % ('/'.join(dc['taxonomy_name'].split('_')), data_config.N_POINTS_GT, s),
-        #         })
-        #         partial_paths.extend(file_list[-1]['partial_path'])
-
+        dataset = TeethSegDataset(**data_config, mode=dataset_type)
+        data_loader = torch.utils.data.DataLoader(
+            dataset, 
+            batch_size=1,
+            shuffle=False, 
+            pin_memory=False,
+            num_workers=10)
 
         state_dict = torch.load(args.model_checkpoint, map_location='cpu')
 
-        # if 'best' in Path(args.model_checkpoint).stem:
-        #     suffix = '-best'
-        # elif 'last' in Path(args.model_checkpoint).stem:
-        #     suffix = '-last'
-        # else:
         suffix = ''
 
         folder_name = f'{dataset_type}-epoch-{state_dict["epoch"]}{suffix}'
 
-        args.out_pc_root = op.join(args.out_pc_root,  folder_name)
+        args.inference_dir = op.join(args.inference_dir,  folder_name)
 
         # save metrics for ckpt
         metrics_path = op.join(op.dirname(args.model_checkpoint), 'metrics.json')
@@ -121,13 +94,14 @@ for ckpt_type in ckpt_types:
 
         # print_log(f'ckpts @ {epoch} epoch( performance = {str(metrics):s})', logger = logger)
 
-        if (not op.exists(args.out_pc_root) or len(os.listdir(args.out_pc_root)) != len(partial_paths)+1) or overwrite:
+
+        if not op.exists(args.inference_dir) or overwrite:
             print('\n# -------------------------------------------------------------------------------------------------- #')
             print(args.cfg_name, '\n')
+            print('Inference on test set\n')
+            os.makedirs(args.inference_dir, exist_ok=True)
 
-            os.makedirs(args.out_pc_root, exist_ok=True)
-
-            shutil.copy(__file__, args.out_pc_root)
+            shutil.copy(__file__, args.inference_dir)
 
             base_model = builder.model_builder(config.model)
 
@@ -136,26 +110,20 @@ for ckpt_type in ckpt_types:
             base_model.to(args.device.lower())
             base_model.eval()
 
-            for corr_file in tqdm(partial_paths):
-                parts = corr_file.split(op.sep)
-                patient = parts[-2]
-                num_points = parts[-3]
-                toothrange = parts[-4]
-                jaw = parts[-5]
-                tooth = parts[-1].split('.')[0]
+            for idx, (corr, gt) in enumerate(data_loader):
+                filename = str(idx).zfill(3)
 
-                # split the path into parts
-                filename = f'{patient}_corr-{jaw}-{toothrange}_recon-{tooth}_npoints-{data_config.N_POINTS}'
                 t0 = time.time()
-                inference_single(
-                    model = base_model, 
-                    pc_path = corr_file, 
-                    args = args,
-                    config = config, 
-                    save_as_pcd=True, 
-                    filename=filename,
-                    data_config = data_config
-                    )
+
+                ret = base_model(corr.to(args.device.lower()))
+                pred = ret[-1] #.squeeze(0).detach().cpu().numpy()
+                
+                for data, name in zip([corr, gt, pred], ['corr', 'gt', 'pred']):
+                    pcd = o3d.geometry.PointCloud()
+                    pcd.points = o3d.utility.Vector3dVector(data.squeeze(0).detach().cpu().numpy())
+                    o3d.io.write_point_cloud(op.join(args.inference_dir, f'{filename}-{name}.pcd'), pcd)
+
+
                 print(f'{filename} done in {time.time()-t0:.2f} s')
         else:
             print(f'Files for {args.cfg_name} already exist.')

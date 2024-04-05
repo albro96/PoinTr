@@ -8,6 +8,7 @@ import numpy as np
 import cv2
 import sys
 import open3d as o3d
+import os.path as op
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(BASE_DIR, '../'))
 
@@ -50,79 +51,31 @@ def get_args():
 
     return args
 
-def inference_single(model, pc_path, args, config, root=None, save_as_pcd=False, filename=None, data_config=None):
-    if root is not None:
-        pc_file = os.path.join(root, pc_path)
-    else:
-        pc_file = pc_path
-    # read single point cloud
-    pc_ndarray = IO.get(pc_file).astype(np.float32)
+def inference_single(model, args, corr, target_path):
 
-    # transform it according to the model 
-    if config.dataset.train._base_['NAME'] == 'ShapeNet':
-        # normalize it to fit the model on ShapeNet-55/34
-        centroid = np.mean(pc_ndarray, axis=0)
-        pc_ndarray = pc_ndarray - centroid
-        m = np.max(np.sqrt(np.sum(pc_ndarray**2, axis=1)))
-        pc_ndarray = pc_ndarray / m
-
-    if data_config is None:
-        data_config = {}
-
-    transforms = []
-    if data_config.get('SAMPLING_METHOD', None) != 'None':
-        transforms.append({   
-        'callback': 'UpSamplePoints' if data_config.get('SAMPLING_METHOD', None) is None else data_config['SAMPLING_METHOD'],
-        'parameters': {
-            'n_points': 2048
-        },
-        'objects': ['input']
-        })
-    
-    transforms.append({
-        'callback': 'ToTensor',
-        'objects': ['input']
-    })
-
-    transform = Compose(transforms)
-    
-    pc_ndarray_normalized = transform({'input': pc_ndarray})
     # inference
-    ret = model(pc_ndarray_normalized['input'].unsqueeze(0).to(args.device.lower()))
+    ret = model(corr.unsqueeze(0).to(args.device.lower()))
+
     dense_points = ret[-1].squeeze(0).detach().cpu().numpy()
 
-    if config.dataset.train._base_['NAME'] == 'ShapeNet':
-        # denormalize it to adapt for the original input
-        dense_points = dense_points * m
-        dense_points = dense_points + centroid
+    os.makedirs(op.dirname(target_path), exist_ok=True)
 
-    if args.out_pc_root != '':
-        target_path = os.path.join(args.out_pc_root, os.path.splitext(pc_path)[0])
+    if target_path.endswith('.pcd'):
+        # print(len(dense_points))
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(dense_points)
+        o3d.io.write_point_cloud(target_path, pcd)
+    else:   
+        np.save(target_path, dense_points)
 
-        os.makedirs(target_path, exist_ok=True)
-
-        if filename is None:
-            filename = 'fine'
-
-        if '.pcd' in filename or '.npy' in filename:
-            filename = filename.split('.')[0]
-
-        if save_as_pcd:
-            os.makedirs(args.out_pc_root, exist_ok=True)
-            # print(len(dense_points))
-            pcd = o3d.geometry.PointCloud()
-            pcd.points = o3d.utility.Vector3dVector(dense_points)
-            o3d.io.write_point_cloud(os.path.join(args.out_pc_root, f'{filename}.pcd'), pcd)
-        else:   
-            np.save(os.path.join(target_path, f'{filename}.npy'), dense_points)
-
-        if args.save_vis_img:
-            input_img = misc.get_ptcloud_img(pc_ndarray_normalized['input'].numpy())
-            dense_img = misc.get_ptcloud_img(dense_points)
-            cv2.imwrite(os.path.join(target_path, 'input.jpg'), input_img)
-            cv2.imwrite(os.path.join(target_path, 'fine.jpg'), dense_img)
+    if args.save_vis_img:
+        # input_img = misc.get_ptcloud_img(pc_ndarray_normalized['input'].numpy())
+        input_img = misc.get_ptcloud_img(corr.numpy())
+        dense_img = misc.get_ptcloud_img(dense_points)
+        cv2.imwrite(os.path.join(target_path, 'input.jpg'), input_img)
+        cv2.imwrite(os.path.join(target_path, 'fine.jpg'), dense_img)
     
-    return
+    return dense_points
 
 def main():
     args = get_args()

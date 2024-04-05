@@ -115,9 +115,9 @@ def run_net(args, config):
             if args.distributed:
                 sparse_loss = dist_utils.reduce_tensor(sparse_loss, args)
                 dense_loss = dist_utils.reduce_tensor(dense_loss, args)
-                losses.update([sparse_loss.item() * 1000, dense_loss.item() * 1000])
+                losses.update([sparse_loss.item() * 1, dense_loss.item() * 1])
             else:
-                losses.update([sparse_loss.item() * 1000, dense_loss.item() * 1000])
+                losses.update([sparse_loss.item() * 1, dense_loss.item() * 1])
 
             if args.distributed:
                 torch.cuda.synchronize()
@@ -150,15 +150,16 @@ def run_net(args, config):
 
             # Save ckeckpoints
             if metrics.better_than(best_metrics):
+                suffix = wandb.run.name if args.sweep else ''
                 best_metrics = metrics
                 if args.save_checkpoints:
-                    builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, 'ckpt-best', args)
+                    builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, f'ckpt-best{suffix}', args)
 
-        if epoch % args.test_freq == 0:
+        if args.test_freq is not None and epoch % args.test_freq == 0:
             metrics = test(base_model, test_dataloader, args, config, epoch=epoch)
 
             
-        if args.save_checkpoints:
+        if args.save_checkpoints and not args.save_only_best:
             builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, 'ckpt-last', args)  
             # save every 100 epoch
             if epoch % 100 == 0 and epoch != 0:
@@ -180,8 +181,8 @@ def run_net(args, config):
         wandb.log(
             {
                 "train/epoch": epoch,
-                "train/sparse_loss": losses.avg(0),
-                "train/dense_loss": losses.avg(1), 
+                "train/sparse_loss": losses.avg()[0],
+                "train/dense_loss": losses.avg()[1], 
             })
         
 
@@ -189,12 +190,8 @@ def validate(base_model, val_dataloader, epoch, args, config, logger = None):
     print(f"\n[VALIDATION] Start validating epoch {epoch}")
     base_model.eval()  # set model to eval mode
 
-    test_losses = AverageMeter(['SparseLossL1', 'SparseLossL2', 'DenseLossL1', 'DenseLossL2'])
-    test_metrics = AverageMeter(Metrics.names())
-    category_metrics = dict()
-    n_samples = len(val_dataloader) # bs is 1
-
-    interval =  n_samples // 10
+    val_losses = AverageMeter(['SparseLossL1', 'SparseLossL2', 'DenseLossL1', 'DenseLossL2'])
+    val_metrics = AverageMeter(Metrics.names())
 
     with torch.no_grad():
         for data in val_dataloader:
@@ -218,55 +215,31 @@ def validate(base_model, val_dataloader, epoch, args, config, logger = None):
                 dense_loss_l1 = dist_utils.reduce_tensor(dense_loss_l1, args)
                 dense_loss_l2 = dist_utils.reduce_tensor(dense_loss_l2, args)
 
-            test_losses.update([sparse_loss_l1.item() * 1000, sparse_loss_l2.item() * 1000, dense_loss_l1.item() * 1000, dense_loss_l2.item() * 1000])
+            val_losses.update([sparse_loss_l1.item() * 1, sparse_loss_l2.item() * 1, dense_loss_l1.item() * 1, dense_loss_l2.item() * 1])
 
-            _metrics = Metrics.get(dense_points, gt)
+            _metrics = Metrics.get(pred=dense_points, gt=gt, partial=partial)
 
             if args.distributed:
                 _metrics = [dist_utils.reduce_tensor(_metric, args).item() for _metric in _metrics]
             else:
                 _metrics = [_metric.item() for _metric in _metrics]
 
-            test_metrics.update(_metrics) 
+            val_metrics.update(_metrics) 
 
-        print(f'[Validation] EPOCH: {epoch}  Metrics = {[f"{m:.4f}" for m in test_metrics.avg()]}')
+        # print(f'[Validation] EPOCH: {epoch}  Metrics = {[f"{m:.4f}" for m in val_metrics.avg()]}')
         
         if args.distributed:
             torch.cuda.synchronize()
     
     print('============================ VAL RESULTS ============================')
-
     log_dict = {'val/epoch': epoch}
-    for metric, value in zip(test_metrics.items, test_metrics.avg()):
+    for metric, value in zip(val_metrics.items, val_metrics.avg()):
         log_dict[f"val/{metric}"] = value
+        print(f'{metric}: {value:.6f}')
 
     wandb.log(log_dict)
 
-    msg = ''
-    msg += 'Taxonomy\t'
-    msg += '#Sample\t'
-    for metric in test_metrics.items:
-        msg += metric + '\t'
-    msg += '#ModelName\t'
-    print(msg)
-
-    for taxonomy_id in category_metrics:
-        msg = ''
-        msg += (taxonomy_id + '\t')
-        msg += (str(category_metrics[taxonomy_id].count(0)) + '\t')
-        for value in category_metrics[taxonomy_id].avg():
-            msg += '%.3f \t' % value
-
-        # msg +=  category_dict[taxonomy_id] + '\t'
-        print(msg)
-
-    msg = ''
-    msg += 'Overall\t\t'
-    for value in test_metrics.avg():
-        msg += '%.3f \t' % value
-    print(msg)
-
-    return Metrics(config.consider_metric, test_metrics.avg())
+    return Metrics(config.consider_metric, val_metrics.avg())
 
 
 crop_ratio = {
@@ -298,7 +271,7 @@ def test(base_model, test_dataloader, args, config, logger = None, epoch=None):
 
     test_losses = AverageMeter(['SparseLossL1', 'SparseLossL2', 'DenseLossL1', 'DenseLossL2'])
     test_metrics = AverageMeter(Metrics.names())
-    category_metrics = dict()
+    # category_metrics = dict()
     n_samples = len(test_dataloader) # bs is 1
 
     with torch.no_grad():
@@ -317,42 +290,16 @@ def test(base_model, test_dataloader, args, config, logger = None, epoch=None):
             dense_loss_l1 =  chamfer_distance(dense_points, gt, norm=1)[0]
             dense_loss_l2 =  chamfer_distance(dense_points, gt, norm=2)[0]
 
-            test_losses.update([sparse_loss_l1.item() * 1000, sparse_loss_l2.item() * 1000, dense_loss_l1.item() * 1000, dense_loss_l2.item() * 1000])
+            test_losses.update([sparse_loss_l1.item() * 1, sparse_loss_l2.item() * 1, dense_loss_l1.item() * 1, dense_loss_l2.item() * 1])
 
-            _metrics = Metrics.get(dense_points, gt, require_emd=False)
+            _metrics = Metrics.get(pred=dense_points, gt=gt, partial=partial)
             test_metrics.update(_metrics)
 
     print('============================ TEST RESULTS ============================')
-
     log_dict = {'test/epoch': epoch}
     for metric, value in zip(test_metrics.items, test_metrics.avg()):
         log_dict[f"test/{metric}"] = value
-
+        print(f'{metric}: {value:.6f}')
     wandb.log(log_dict)
 
-    msg = ''
-    msg += 'Taxonomy\t'
-    msg += '#Sample\t'
-
-    for metric in test_metrics.items:
-        msg += metric + '\t'
-    msg += '#ModelName\t'
-    print(msg)
-
-
-    for taxonomy_id in category_metrics:
-        msg = ''
-        msg += (taxonomy_id + '\t')
-        msg += (str(category_metrics[taxonomy_id].count(0)) + '\t')
-        for value in category_metrics[taxonomy_id].avg():
-            msg += '%.3f \t' % value
-
-        # msg +=  category_dict[taxonomy_id] + '\t'
-        print(msg)
-
-    msg = ''
-    msg += 'Overall \t\t'
-    for value in test_metrics.avg():
-        msg += '%.3f \t' % value
-    print(msg)
     return 

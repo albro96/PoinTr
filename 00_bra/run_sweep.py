@@ -23,7 +23,7 @@ def run_agent(gpu_num, sweep_id):
         None
     """
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_num)
-    wandb.agent(sweep_id)
+    wandb.agent(sweep_id, count=50)
 
 if __name__ == '__main__':
     pada = import_dir_path()
@@ -33,7 +33,7 @@ if __name__ == '__main__':
     "program": "run_training.py",
     "method": "random",
     "metric": {
-        "name": "test/CDL2",
+        "name": "val/CDL2",
         "goal": "minimize"
     },
     'early_terminate': {
@@ -41,18 +41,17 @@ if __name__ == '__main__':
         'min_iter': 10
     },
     "parameters": {
+        "sweep": {
+            "values": [True]
+        },
         "optimizer.type": {
             "values": ['AdamW', 'SGD', 'Adam']
         },
         "optimizer.kwargs.lr": {
-            "distribution": "uniform",
-            "min": 0.00001,
-            "max": 0.01
+            "values": [0.1, 0.01, 0.001, 0.0001, 0.00001, 0.000001]
         },
         "optimizer.kwargs.weight_decay": {
-            "distribution": "uniform",
-            "min": 0.00001,
-            "max": 0.01
+            "values": [1, 0.1, 0.01, 0.001, 0.0001, 0.00001, 0.000001]
         },
         "model.num_query": {
             "distribution": "int_uniform",
@@ -65,23 +64,28 @@ if __name__ == '__main__':
             "max": 10
         },
         "dense_loss_coeff": {
-            "distribution": "int_uniform",
+            "distribution": "uniform",
             "min": 0,
-            "max": 100
+            "max": 10
         },
         'scheduler.kwargs.lr_decay': {
             "distribution": "uniform",
-            "min": 0.02,
-            "max": 0.9
+            "min": 0.1,
+            "max": 1.0
+        },
+        'scheduler.kwargs.decay_step': {
+            "distribution": "int_uniform",
+            "min": 1,
+            "max": 50
         },
         'bnmscheduler.kwargs.bn_decay': {
             "distribution": "uniform",
-            "min": 0.01,
-            "max": 0.9
+            "min": 0.1,
+            "max": 1.0
         },
         'bnmscheduler.kwargs.bn_momentum': {
             "distribution": "uniform",
-            "min": 0.5,
+            "min": 0.1,
             "max": 0.9
         }
     }

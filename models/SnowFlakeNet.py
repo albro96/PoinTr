@@ -268,8 +268,8 @@ class SnowFlakeNet(nn.Module):
 
         partial_matching = self.loss_func_PM(partial_input, P3)
 
-        loss_coarse = (cdc + cd1 + cd2 + partial_matching) * 1000
-        loss_fine = cd3 * 1000
+        loss_coarse = (cdc + cd1 + cd2 + partial_matching) * 1
+        loss_fine = cd3 * 1
         # losses = [cdc, cd1, cd2, cd3, partial_matching]
         return loss_coarse, loss_fine
 

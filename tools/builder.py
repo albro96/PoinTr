@@ -97,7 +97,7 @@ def build_scheduler(base_model, optimizer, config, last_epoch=-1):
     return scheduler
 
 def resume_model(base_model, args, logger = None):
-    ckpt_path = os.path.join(args.experiment_path, 'ckpt-last.pth')
+    ckpt_path = os.path.join(args.ckpt_dir, 'ckpt-last.pth')
     if not os.path.exists(ckpt_path):
         print_log(f'[RESUME INFO] no checkpoint file from path {ckpt_path}...', logger = logger)
         return 0, 0
@@ -122,7 +122,7 @@ def resume_model(base_model, args, logger = None):
     return start_epoch, best_metrics
 
 def resume_optimizer(optimizer, args, logger = None):
-    ckpt_path = os.path.join(args.experiment_path, 'ckpt-last.pth')
+    ckpt_path = os.path.join(args.ckpt_dir, 'ckpt-last.pth')
     if not os.path.exists(ckpt_path):
         print_log(f'[RESUME INFO] no checkpoint file from path {ckpt_path}...', logger = logger)
         return 0, 0, 0
@@ -140,8 +140,8 @@ def save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, prefix,
                     'epoch' : epoch,
                     'metrics' : metrics.state_dict() if metrics is not None else dict(),
                     'best_metrics' : best_metrics.state_dict() if best_metrics is not None else dict(),
-                    }, os.path.join(args.experiment_path, prefix + '.pth'))
-        print_log(f"Save checkpoint at {os.path.join(args.experiment_path, prefix + '.pth')}", logger = logger)
+                    }, os.path.join(args.ckpt_dir, prefix + '.pth'))
+        print_log(f"Save checkpoint at {os.path.join(args.ckpt_dir, prefix + '.pth')}", logger = logger)
 
 def load_model(base_model, ckpt_path, logger = None):
     if not os.path.exists(ckpt_path):

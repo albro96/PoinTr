@@ -32,6 +32,7 @@ from utils.config import *
 
 def main(rank=0, world_size=1):
     network_type = 'PoinTr'
+
     pada = import_dir_path()
 
     data_config = EasyDict({
@@ -42,16 +43,17 @@ def main(rank=0, world_size=1):
         "data_type": "npy",
         "samplingmethod": 'fps', 
         "downsample_steps": 2,
-        "splits": {'train': 0.8,'val': 0.15, 'test': 0.05},
+        "splits": {'train': 0.85,'val': 0.1, 'test': 0.05},
         "enable_cache": True,
         "create_cache_file": True,
         "overwrite_cache_file": False,
         "cache_dir": op.join(pada.base_dir, 'nobackup', 'data', '3DTeethSeg22', 'cache'),
     })
 
+    suffix = None
     experiment_name = datetime.now().strftime('%y%m%d') + f'_{network_type}'
 
-    suffix = None
+    
     if suffix is not None and not suffix.startswith('_'):
         suffix = '_' + suffix
         experiment_name += suffix
@@ -67,12 +69,15 @@ def main(rank=0, world_size=1):
         'experiment_dir': pada.models.pointr.model_dir,
         'start_ckpts': None,
         'ckpts': None,
-        'val_freq': 1,
-        'test_freq': 1,
+        'val_freq': 10,
+        'test_freq': None,
         'resume': False,
         'test': False,
         'mode': None,
-        'save_checkpoints': False,
+        'save_checkpoints': True,
+        'save_only_best': True,
+        'ckpt_dir': None,
+        'cfg_dir': None,
     })
 
 
@@ -180,7 +185,7 @@ def main(rank=0, world_size=1):
         },
         "total_bs": int(14*world_size), #int(28*num_gpus),
         "step_per_update": 1,
-        "max_epoch": 300,
+        "max_epoch": 500,
         "consider_metric": "CDL2",
         "dense_loss_coeff": 1.0,
     }
@@ -233,13 +238,6 @@ def main(rank=0, world_size=1):
         _, world_size = dist_utils.get_dist_info()
         args.world_size = world_size
 
-
-    if not os.path.exists(args.experiment_path):
-        os.makedirs(args.experiment_path, exist_ok=True)
-        print('Create experiment path successfully at %s' % args.experiment_path)
-
-    shutil.copy(__file__, args.experiment_path)
-
     # exit()
     print(f'Distributed training: {args.distributed}')
 
@@ -258,7 +256,7 @@ def main(rank=0, world_size=1):
         # track hyperparameters and run metadata
         config=config,
         #name=args.exp_name,
-        dir=args.experiment_path,
+        # dir=args.experiment_path,
         # id=args.exp_name,
         resume=args.resume,
         save_code=True,
@@ -283,6 +281,15 @@ def main(rank=0, world_size=1):
     # wandb.define_metric("train/dense_loss", summary="min", step_metric="train/epoch")
     # wandb.define_metric("train/sparse_loss", summary="min", step_metric="train/epoch")
 
+    # wandb.define_metric("val/CDL1", step_metric="val/epoch")
+    # wandb.define_metric("val/CDL2", step_metric="val/epoch")
+    # wandb.define_metric("val/EMDistance", step_metric="val/epoch")
+    # wandb.define_metric("test/CDL1", step_metric="test/epoch")
+    # wandb.define_metric("test/CDL2", step_metric="test/epoch")
+    # wandb.define_metric("test/EMDistance", step_metric="test/epoch")
+    # wandb.define_metric("train/dense_loss", step_metric="train/epoch")
+    # wandb.define_metric("train/sparse_loss", step_metric="train/epoch")
+
     # If called by wandb.agent, as below,
     # this config will be set by Sweep Controller
     wandb_config = wandb.config
@@ -296,7 +303,31 @@ def main(rank=0, world_size=1):
                 config_temp = config_temp.setdefault(sub_key, {})
             config_temp[keys[-1]] = value
 
-    with open(os.path.join(args.experiment_path, 'config.json'), "w") as json_file:
+    args.sweep = True if 'sweep' in wandb_config else False
+
+    if args.sweep:
+        args.experiment_path += '-sweep'
+
+    if not os.path.exists(args.experiment_path):
+        os.makedirs(args.experiment_path, exist_ok=True)
+        print('Create experiment path successfully at %s' % args.experiment_path)
+
+    shutil.copy(__file__, args.experiment_path)
+
+    # set the wandb run dir
+    # wandb.run.dir = args.experiment_path
+
+    args.cfg_dir = op.join(args.experiment_path, 'config')
+    args.ckpt_dir = op.join(args.experiment_path, 'ckpt')
+    os.makedirs(args.cfg_dir, exist_ok=True)
+    os.makedirs(args.ckpt_dir, exist_ok=True)
+
+    if args.sweep:
+        cfg_name = f'config-{wandb.run.name}.json'
+    else:
+        cfg_name = 'config.json'
+
+    with open(os.path.join(args.cfg_dir, cfg_name), "w") as json_file:
         json_file.write(json.dumps(config, indent=4))
 
     
@@ -318,6 +349,11 @@ def main(rank=0, world_size=1):
         test_net(args, config)
     else:
         run_net(args, config)
+
+
+# argparse = argparse.ArgumentParser()
+# argparse.add_argument('--sweep', type=bool, default=False, help='Sweep mode')
+# argparse_args = argparse.parse_args()
 
 # ---------------------------------------- #
 # ----------------- RUN ------------------ #
