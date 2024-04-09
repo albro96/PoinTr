@@ -20,7 +20,8 @@ from tools import builder
 from tools.inference import inference_single
 from datasets.TeethSegDataset import TeethSegDataset
 
-model_name = '240405_PoinTr'
+
+model_name = 'fast-sweep-19'
 
 ckpt_types = ['ckpt-best'] #
 device = torch.device('cuda:0')
@@ -35,15 +36,21 @@ for ckpt_type in ckpt_types:
 
     model_args = []
 
-    dataset_type = 'test'
+    dataset_type = 'train'
+    num_items = 20
 
+    # find the file that ends with f'{model_name}.pth' in model_dir recursively
 
     for dirpath, dirnames, filenames in os.walk(model_dir):
+        
         for filename in filenames:
-            if Path(filename).stem == ckpt_type:
+            # print(filename)
+            if filename.endswith(f'{model_name}.pth'):
+                print(dirpath)
                 args = EasyDict({
-                    'cfg_name': op.basename(op.dirname(dirpath)),
-                    'model_config': op.join(op.dirname(dirpath), 'config', 'config.json'), 
+                    'base_dir': op.dirname(dirpath), 
+                    'cfg_name': Path(filename).stem,
+                    'model_config': op.join(op.dirname(dirpath), 'config', f'config-{model_name}.json'), 
                     'model_checkpoint': op.join(dirpath, filename),
                     'inference_dir': op.join(op.dirname(dirpath), 'inference'),
                     'device': 'cuda:0',
@@ -73,7 +80,7 @@ for ckpt_type in ckpt_types:
 
         suffix = ''
 
-        folder_name = f'{dataset_type}-epoch-{state_dict["epoch"]}{suffix}'
+        folder_name = f'{args.cfg_name}_{dataset_type}-epoch-{state_dict["epoch"]}{suffix}'
 
         args.inference_dir = op.join(args.inference_dir,  folder_name)
 
@@ -111,17 +118,30 @@ for ckpt_type in ckpt_types:
             base_model.eval()
 
             for idx, (corr, gt) in enumerate(data_loader):
+
+                if idx == num_items:
+                    break
+        
                 filename = str(idx).zfill(3)
 
                 t0 = time.time()
 
                 ret = base_model(corr.to(args.device.lower()))
                 pred = ret[-1] #.squeeze(0).detach().cpu().numpy()
+
+                corr = corr.detach().cpu()
+                gt = gt.detach().cpu()
+                pred = pred.detach().cpu()
                 
                 for data, name in zip([corr, gt, pred], ['corr', 'gt', 'pred']):
                     pcd = o3d.geometry.PointCloud()
-                    pcd.points = o3d.utility.Vector3dVector(data.squeeze(0).detach().cpu().numpy())
+                    pcd.points = o3d.utility.Vector3dVector(data.squeeze(0).numpy())
                     o3d.io.write_point_cloud(op.join(args.inference_dir, f'{filename}-{name}.pcd'), pcd)
+
+                    if name != 'corr':
+                        pcd = o3d.geometry.PointCloud()
+                        pcd.points = o3d.utility.Vector3dVector(torch.cat([data, corr], dim=1).squeeze(0).numpy())
+                        o3d.io.write_point_cloud(op.join(args.inference_dir, f'{filename}-full-{name}.pcd'), pcd)
 
 
                 print(f'{filename} done in {time.time()-t0:.2f} s')

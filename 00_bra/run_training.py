@@ -183,9 +183,9 @@ def main(rank=0, world_size=1):
             "knn_layer": 1,
             "trans_dim": 384
         },
-        "total_bs": int(14*world_size), #int(28*num_gpus),
+        "total_bs": int(12*world_size), #int(28*num_gpus),
         "step_per_update": 1,
-        "max_epoch": 500,
+        "max_epoch": 400,
         "consider_metric": "CDL2",
         "dense_loss_coeff": 1.0,
     }

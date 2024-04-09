@@ -187,7 +187,7 @@ def run_net(args, config):
         
 
 def validate(base_model, val_dataloader, epoch, args, config, logger = None):
-    print(f"\n[VALIDATION] Start validating epoch {epoch}")
+    # print(f"\n[VALIDATION] Start validating epoch {epoch}")
     base_model.eval()  # set model to eval mode
 
     val_losses = AverageMeter(['SparseLossL1', 'SparseLossL2', 'DenseLossL1', 'DenseLossL2'])
@@ -232,6 +232,7 @@ def validate(base_model, val_dataloader, epoch, args, config, logger = None):
             torch.cuda.synchronize()
     
     print('============================ VAL RESULTS ============================')
+    print(f'Epoch: {epoch}')
     log_dict = {'val/epoch': epoch}
     for metric, value in zip(val_metrics.items, val_metrics.avg()):
         log_dict[f"val/{metric}"] = value

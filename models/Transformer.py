@@ -399,9 +399,9 @@ class PCTransformer(nn.Module):
         # encoder
         for i, blk in enumerate(self.encoder):
             if i < self.knn_layer:
-                x = blk(x + pos, knn_index)   # B N C
+                x = blk(x + pos, knn_index)   # B N C  # Apply knn up to knn_layer
             else:
-                x = blk(x + pos)
+                x = blk(x + pos) # No knn beyond knn_layer
         # build the query feature for decoder
         # global_feature  = x[:, 0] # B C
 
@@ -420,9 +420,9 @@ class PCTransformer(nn.Module):
         # decoder
         for i, blk in enumerate(self.decoder):
             if i < self.knn_layer:
-                q = blk(q, x, new_knn_index, cross_knn_index)   # B M C
+                q = blk(q, x, new_knn_index, cross_knn_index)   # B M C  # Apply knn up to knn_layer
             else:
-                q = blk(q, x)
+                q = blk(q, x) # No knn beyond knn_layer
 
         return q, coarse_point_cloud
 
