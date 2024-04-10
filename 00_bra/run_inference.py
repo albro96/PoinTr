@@ -20,8 +20,7 @@ from tools import builder
 from tools.inference import inference_single
 from datasets.TeethSegDataset import TeethSegDataset
 
-
-model_name = 'fast-sweep-19'
+model_name = 'cool-sweep-3'
 
 ckpt_types = ['ckpt-best'] #
 device = torch.device('cuda:0')
@@ -37,7 +36,7 @@ for ckpt_type in ckpt_types:
     model_args = []
 
     dataset_type = 'train'
-    num_items = 20
+    num_items = 10
 
     # find the file that ends with f'{model_name}.pth' in model_dir recursively
 

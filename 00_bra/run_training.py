@@ -31,13 +31,12 @@ from utils.config import *
 # ---------------------------------------- #
 
 def main(rank=0, world_size=1):
-    network_type = 'PoinTr'
-
     pada = import_dir_path()
 
     data_config = EasyDict({
         "num_points_gt": 2048,
-        "num_points_corr": 4096, # 2048 4096 8192 16384
+        "num_points_corr": 1024, # 2048 4096 8192 16384 
+        "num_points_corr_type": "single",
         "tooth_range": {'corr': '35-37', 'gt': [36], 'jaw': 'lower','quadrants': 'all'},
         "gt_type": "single",
         "data_type": "npy",
@@ -50,13 +49,6 @@ def main(rank=0, world_size=1):
         "cache_dir": op.join(pada.base_dir, 'nobackup', 'data', '3DTeethSeg22', 'cache'),
     })
 
-    suffix = None
-    experiment_name = datetime.now().strftime('%y%m%d') + f'_{network_type}'
-
-    
-    if suffix is not None and not suffix.startswith('_'):
-        suffix = '_' + suffix
-        experiment_name += suffix
 
     args = EasyDict({
         'launcher': 'pytorch' if world_size > 1 else 'none',
@@ -65,8 +57,7 @@ def main(rank=0, world_size=1):
         'seed': 0,
         'deterministic': False,
         'sync_bn': False,
-        'exp_name': experiment_name,
-        'experiment_dir': pada.models.pointr.model_dir,
+        'experiment_dir': pada.model_base_dir,
         'start_ckpts': None,
         'ckpts': None,
         'val_freq': 10,
@@ -80,35 +71,48 @@ def main(rank=0, world_size=1):
         'cfg_dir': None,
     })
 
-
-    network_config_dict = EasyDict()
-
-    network_config_dict.AdaPoinTr = {
+    config = EasyDict({
         "optimizer": {
             "type": "AdamW",
             "kwargs": {
-                "lr": 0.0001,
-                "weight_decay": 0.0005
-            }
+                "lr": 0.0001, # royal-sweep-11 
+                "weight_decay": 1 # royal-sweep-11 # 0.0001
+                }
         },
         "scheduler": {
             "type": "LambdaLR",
             "kwargs": {
-                "decay_step": 21,
-                "lr_decay": 0.9,
-                "lowest_decay": 0.02
+                "decay_step": 47, # royal-sweep-11 # 40,
+                "lr_decay": 0.76, # royal-sweep-11 # 0.7,
+                "lowest_decay": 0.02  # min lr = lowest_decay * lr
             }
         },
         "bnmscheduler": {
             "type": "Lambda",
             "kwargs": {
-                "decay_step": 21,
-                "bn_decay": 0.5,
-                "bn_momentum": 0.9,
+                "decay_step": 40,
+                "bn_decay": 0.96, # royal-sweep-11 # 0.5,
+                "bn_momentum": 0.55, # royal-sweep-11 # 0.9,
                 "lowest_decay": 0.01
             }
         },
-        "dataset": data_config,
+        'dataset': data_config,
+        'model': {
+            'gt_type': data_config.gt_type,
+            'cd_norm': 2,
+        },
+        'max_epoch': 400,
+        'consider_metric': 'CDL2',
+        'total_bs': int(2*world_size),
+        'dense_loss_coeff': 1.0,
+        'step_per_update': 1,  
+        'model_name': 'PoinTr',  
+        })
+    
+
+    network_config_dict = EasyDict()
+
+    network_config_dict.AdaPoinTr = {
         "model": {
             "NAME": "AdaPoinTr",
             "num_query": 512,
@@ -140,57 +144,26 @@ def main(rank=0, world_size=1):
                 "cross_attn_combine_style": "concat"
             }
         },
-
-        "total_bs": int(16*world_size), #16,
-        "step_per_update": 1,
-        "max_epoch": 5,
-        "consider_metric": "CDL1",
-        "dense_loss_coeff": 0.1,
     }
 
     network_config_dict.PoinTr = {
-        "optimizer": {
-            "type": "AdamW",
-            "kwargs": {
-                "lr": 0.0001,
-                "weight_decay": 0.0001
-            }
-        },
-        "scheduler": {
-            "type": "LambdaLR",
-            "kwargs": {
-                "decay_step": 40,
-                "lr_decay": 0.7,
-                "lowest_decay": 0.02  # min lr = lowest_decay * lr
-            }
-        },
-        "bnmscheduler": {
-            "type": "Lambda",
-            "kwargs": {
-                "decay_step": 40,
-                "bn_decay": 0.5,
-                "bn_momentum": 0.9,
-                "lowest_decay": 0.01
-            }
-        },
-        "dataset": data_config,
         "model": {
             "NAME": "PoinTr",
             "num_pred": data_config.num_points_gt,
-            "gt_type": data_config.gt_type,
-            "cd_norm": 2,
-            "num_query": 224,   # number of coarse points, dense points = 224*9 = 2016 (always true?)
-            "knn_layer": 1,
+            "num_query": 222, # royal-sweep-11 #224,   # number of coarse points, dense points = 224*9 = 2016 (always true?)
+            "knn_layer": 2, # royal-sweep-11 #1,
             "trans_dim": 384
         },
-        "total_bs": int(12*world_size), #int(28*num_gpus),
-        "step_per_update": 1,
-        "max_epoch": 400,
-        "consider_metric": "CDL2",
-        "dense_loss_coeff": 1.0,
     }
 
-    config = network_config_dict[network_type]
+    network_config_dict.PCN = {
+        "model": {
+            "NAME": "PCN",
+            "num_pred": data_config.num_points_gt,
+            "encoder_channel": 1024
+        },
+    }
+
 
     if args.test and args.resume:
         raise ValueError(
@@ -207,14 +180,6 @@ def main(rank=0, world_size=1):
     if args.local_rank is not None:
         if 'LOCAL_RANK' not in os.environ:
             os.environ['LOCAL_RANK'] = str(args.local_rank)
-
-    if args.test:
-        args.exp_name = args.exp_name + '_test'
-    if args.mode is not None:
-        args.exp_name = args.exp_name + f'_{args.mode}'
-
-    args.experiment_path = os.path.join(args.experiment_dir, args.exp_name)
-    args.log_name = args.exp_name
 
     # CUDA
     args.use_gpu = torch.cuda.is_available()
@@ -252,13 +217,8 @@ def main(rank=0, world_size=1):
 
     wandb.init(
         # set the wandb project where this run will be logged
-        project=network_type,
-        # track hyperparameters and run metadata
+        project='ToothRecon',
         config=config,
-        #name=args.exp_name,
-        # dir=args.experiment_path,
-        # id=args.exp_name,
-        resume=args.resume,
         save_code=True,
     )
 
@@ -272,24 +232,6 @@ def main(rank=0, world_size=1):
     wandb.define_metric("val/*", step_metric="val/epoch")
     wandb.define_metric("test/*", step_metric="test/epoch")
 
-    # wandb.define_metric("val/CDL1", summary="min", step_metric="val/epoch")
-    # wandb.define_metric("val/CDL2", summary="min", step_metric="val/epoch")
-    # wandb.define_metric("val/EMDistance", summary="min", step_metric="val/epoch")
-    # wandb.define_metric("test/CDL1", summary="min", step_metric="test/epoch")
-    # wandb.define_metric("test/CDL2", summary="min", step_metric="test/epoch")
-    # wandb.define_metric("test/EMDistance", summary="min", step_metric="test/epoch")
-    # wandb.define_metric("train/dense_loss", summary="min", step_metric="train/epoch")
-    # wandb.define_metric("train/sparse_loss", summary="min", step_metric="train/epoch")
-
-    # wandb.define_metric("val/CDL1", step_metric="val/epoch")
-    # wandb.define_metric("val/CDL2", step_metric="val/epoch")
-    # wandb.define_metric("val/EMDistance", step_metric="val/epoch")
-    # wandb.define_metric("test/CDL1", step_metric="test/epoch")
-    # wandb.define_metric("test/CDL2", step_metric="test/epoch")
-    # wandb.define_metric("test/EMDistance", step_metric="test/epoch")
-    # wandb.define_metric("train/dense_loss", step_metric="train/epoch")
-    # wandb.define_metric("train/sparse_loss", step_metric="train/epoch")
-
     # If called by wandb.agent, as below,
     # this config will be set by Sweep Controller
     wandb_config = wandb.config
@@ -302,12 +244,21 @@ def main(rank=0, world_size=1):
             for sub_key in keys[:-1]:
                 config_temp = config_temp.setdefault(sub_key, {})
             config_temp[keys[-1]] = value
+        else:
+            config[key] = value
+
+
+    config.model.update(network_config_dict[config.model_name].model) 
+    if config.model.NAME == 'AdaPoinTr':
+        config.model.dense_loss_coeff = config.dense_loss_coeff
 
     args.sweep = True if 'sweep' in wandb_config else False
 
-    if args.sweep:
-        args.experiment_path += '-sweep'
+    args.experiment_path = os.path.join(args.experiment_dir, config.model_name)
 
+    if args.sweep:
+        args.experiment_path = os.path.join(args.experiment_path, 'sweep', wandb.run.sweep_id)
+        
     if not os.path.exists(args.experiment_path):
         os.makedirs(args.experiment_path, exist_ok=True)
         print('Create experiment path successfully at %s' % args.experiment_path)
@@ -322,14 +273,10 @@ def main(rank=0, world_size=1):
     os.makedirs(args.cfg_dir, exist_ok=True)
     os.makedirs(args.ckpt_dir, exist_ok=True)
 
-    if args.sweep:
-        cfg_name = f'config-{wandb.run.name}.json'
-    else:
-        cfg_name = 'config.json'
+    cfg_name = f'config-{wandb.run.name}.json'
 
     with open(os.path.join(args.cfg_dir, cfg_name), "w") as json_file:
         json_file.write(json.dumps(config, indent=4))
-
     
     # batch size
     if args.distributed:

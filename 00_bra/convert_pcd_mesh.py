@@ -18,7 +18,7 @@ num_points = 1024
 create_mesh = False
 
 # pcd_dir_nt = r'O:\data\models\PoinTr\240409_PoinTr-sweep\inference\ckpt-bestfaithful-sweep-122_test-epoch-410'
-pcd_dir_nt = r'O:\data\models\PoinTr\240405_PoinTr-sweep\inference\ckpt-bestfast-sweep-19_train-epoch-350'
+pcd_dir_nt = r'O:\data\models\PoinTr\240409_PoinTr-sweep\inference\ckpt-bestblooming-sweep-2_test-epoch-0'
 
 
 pcd_dir = convert_path(pcd_dir_nt)
@@ -43,10 +43,13 @@ for data_num, pcds in data_dir.items():
 
     pcd_pred = o3d.io.read_point_cloud(pcds[data_type])
 
+
+
     if data_type == 'pred':
         tensor_pred = torch.tensor(pcd_pred.points).unsqueeze(0)
+        print(tensor_pred.shape)
         tensor_pred_red = fps(tensor_pred, K=num_points)[0].squeeze(0)
-        print(tensor_pred_red.shape)
+        # print(tensor_pred_red.shape)
 
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(tensor_pred_red.numpy())

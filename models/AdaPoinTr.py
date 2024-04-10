@@ -11,6 +11,7 @@ from extensions.chamfer_dist import ChamferDistanceL1
 from .build import MODELS, build_model_from_cfg
 from models.Transformer_utils import *
 from utils import misc
+from pytorch3d.loss import chamfer_distance
 
 class SelfAttnBlockApi(nn.Module):
     r'''
@@ -897,6 +898,9 @@ class AdaPoinTr(nn.Module):
         self.trans_dim = config.decoder_config.embed_dim
         self.num_query = config.num_query
         self.num_points = getattr(config, 'num_points', None)
+        self.cd_norm = config.cd_norm
+        self.gt_type = config.gt_type
+        self.dense_loss_coeff = config.dense_loss_coeff
 
         self.decoder_type = config.decoder_type
         assert self.decoder_type in ['fold', 'fc'], f'unexpected decoder_type {self.decoder_type}'
@@ -922,10 +926,10 @@ class AdaPoinTr(nn.Module):
             nn.Conv1d(1024, 1024, 1)
         )
         self.reduce_map = nn.Linear(self.trans_dim + 1027, self.trans_dim)
-        self.build_loss_func()
+    #     self.build_loss_func()
 
-    def build_loss_func(self):
-        self.loss_func = ChamferDistanceL1()
+    # def build_loss_func(self):
+    #     self.loss_func = ChamferDistanceL1()
 
     def get_loss(self, ret, gt, epoch=1):
         pred_coarse, denoised_coarse, denoised_fine, pred_fine = ret
@@ -937,13 +941,19 @@ class AdaPoinTr(nn.Module):
         denoised_target = index_points(gt, idx) # B n k 3 
         denoised_target = denoised_target.reshape(gt.size(0), -1, 3)
         assert denoised_target.size(1) == denoised_fine.size(1)
-        loss_denoised = self.loss_func(denoised_fine, denoised_target)
-        loss_denoised = loss_denoised * 0.5
+
+        # loss_denoised = self.loss_func(denoised_fine, denoised_target)
+        loss_denoised = chamfer_distance(denoised_fine, denoised_target, norm=self.cd_norm)[0]
+
+        # loss_denoised = loss_denoised * 0.5 # BRA why this line?
 
         # recon loss
-        loss_coarse = self.loss_func(pred_coarse, gt)
-        loss_fine = self.loss_func(pred_fine, gt)
-        loss_recon = loss_coarse + loss_fine
+        # loss_coarse = self.loss_func(pred_coarse, gt)
+        # loss_fine = self.loss_func(pred_fine, gt)
+        loss_coarse = chamfer_distance(pred_coarse, gt, norm=self.cd_norm)[0]
+        loss_fine = chamfer_distance(pred_fine, gt, norm=self.cd_norm)[0]
+
+        loss_recon = loss_coarse + self.dense_loss_coeff * loss_fine # BRA added denseloss coeff here
 
         return loss_denoised, loss_recon
 

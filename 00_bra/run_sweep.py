@@ -12,7 +12,7 @@ from os_tools.import_dir_path import import_dir_path
 # change to the directory of this file
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-def run_agent(gpu_num, sweep_id, project=None, entity=None,  count=50):
+def run_agent(gpu_num, sweep_id, project=None, entity=None,  count=2):
     """
     Run the agent on the specified GPU.
 
@@ -34,82 +34,89 @@ def run_agent(gpu_num, sweep_id, project=None, entity=None,  count=50):
 
 if __name__ == '__main__':
 
-    resume_data = None # {'entity': 'albro96', 'project': 'PoinTr', 'sweep_id': '72kzbo6h'}
+    resume_data = None #{'entity': 'albro96', 'project': 'PoinTr', 'sweep_id': 'wxb8uwm7'}
     resume = False
+
 
     pada = import_dir_path()
 
     sweep_configuration = {
-    "description": "Fixed dense loss coeff sweep",
+    "description": "Only Optimizer/Scheduler",
     "program": "run_training.py",
-    "method": "random",
+    "method": "grid", #"random",
     "metric": {
         "name": "val/CDL2",
         "goal": "minimize"
     },
-    'early_terminate': {
-        'type': 'hyperband',
-        'min_iter': 20
-    },
+    # 'early_terminate': {
+    #     'type': 'hyperband',
+    #     'min_iter': 20
+    # },
     "parameters": {
         "sweep": {
             "values": [True]
         },
+        "dataset.tooth_range.corr": {
+            "values": ['35-37', [35, 36, 37, 46], '5-7', '31-37', '1-7']
+        },
+        "model_name": {
+            'values': ['AdaPoinTr', 'PoinTr', 'PCN']
+        },
+
         # "optimizer.type": {
         #     "values": ['AdamW', 'SGD', 'Adam']
         # },
-        "optimizer.kwargs.lr": {
-            "values": [0.1, 0.01, 0.001, 0.0001, 0.00001, 0.000001]
-        },
-        "optimizer.kwargs.weight_decay": {
-            "values": [1, 0.1, 0.01, 0.001, 0.0001, 0.00001, 0.000001]
-        },
-        "model.num_query": {
-            "distribution": "int_uniform",
-            "min": 128,
-            "max": 256
-        },
-        "model.knn_layer": {
-            "distribution": "int_uniform",
-            "min": 1,
-            "max": 5
-        },
+        # "optimizer.kwargs.lr": {
+        #     "values": [0.1, 0.01, 0.001, 0.0001, 0.00001, 0.000001]
+        # },
+        # "optimizer.kwargs.weight_decay": {
+        #     "values": [1, 0.1, 0.01, 0.001, 0.0001, 0.00001, 0.000001]
+        # },
+        # "model.num_query": {
+        #     "distribution": "int_uniform",
+        #     "min": 128,
+        #     "max": 256
+        # },
+        # "model.knn_layer": {
+        #     "distribution": "int_uniform",
+        #     "min": 1,
+        #     "max": 5
+        # },
         # "dense_loss_coeff": {
         #     "distribution": "uniform",
         #     "min": 0,
         #     "max": 10
         # },
-        'scheduler.kwargs.lr_decay': {
-            "distribution": "uniform",
-            "min": 0.1,
-            "max": 1.0
-        },
-        'scheduler.kwargs.decay_step': {
-            "distribution": "int_uniform",
-            "min": 1,
-            "max": 50
-        },
-        'bnmscheduler.kwargs.bn_decay': {
-            "distribution": "uniform",
-            "min": 0.1,
-            "max": 1.0
-        },
-        'bnmscheduler.kwargs.bn_momentum': {
-            "distribution": "uniform",
-            "min": 0.1,
-            "max": 0.9
-        }
+        # 'scheduler.kwargs.lr_decay': {
+        #     "distribution": "uniform",
+        #     "min": 0.1,
+        #     "max": 1.0
+        # },
+        # 'scheduler.kwargs.decay_step': {
+        #     "distribution": "int_uniform",
+        #     "min": 1,
+        #     "max": 50
+        # },
+        # 'bnmscheduler.kwargs.bn_decay': {
+        #     "distribution": "uniform",
+        #     "min": 0.1,
+        #     "max": 1.0
+        # },
+        # 'bnmscheduler.kwargs.bn_momentum': {
+        #     "distribution": "uniform",
+        #     "min": 0.1,
+        #     "max": 0.9
+        # }
     }
     }
 
-    os.environ['WANDB_DIR'] = pada.models.pointr.model_dir
+    os.environ['WANDB_DIR'] = pada.model_base_dir
 
     if not resume:
         # Initialize sweep by passing in config.
-        sweep_id = wandb.sweep(sweep=sweep_configuration, project="PoinTr")
+        sweep_id = wandb.sweep(sweep=sweep_configuration, project="ToothRecon")
     else:
         print('Resuming sweep with sweep-parameters: ', resume_data)
-
 
     gpus = [0,1,2,3] # number of gpus or list of gpus
     

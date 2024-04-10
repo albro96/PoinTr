@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 from .build import MODELS
 from extensions.chamfer_dist import ChamferDistanceL2
+from pytorch3d.loss import chamfer_distance
 
 @MODELS.register_module()
 class PCN(nn.Module):
@@ -11,6 +12,9 @@ class PCN(nn.Module):
         self.encoder_channel = config.encoder_channel
         grid_size = 4 # set default
         self.grid_size = grid_size
+        self.cd_norm = config.cd_norm
+        self.gt_type = config.get('gt_type', 'full')
+
         assert self.number_fine % grid_size**2 == 0
         self.number_coarse = self.number_fine // (grid_size ** 2 )
         self.first_conv = nn.Sequential(
@@ -44,15 +48,16 @@ class PCN(nn.Module):
         a = torch.linspace(-0.05, 0.05, steps=grid_size, dtype=torch.float).view(1, grid_size).expand(grid_size, grid_size).reshape(1, -1)
         b = torch.linspace(-0.05, 0.05, steps=grid_size, dtype=torch.float).view(grid_size, 1).expand(grid_size, grid_size).reshape(1, -1)
         self.folding_seed = torch.cat([a, b], dim=0).view(1, 2, grid_size ** 2).cuda() # 1 2 S
-        self.build_loss_func()
+    #     self.build_loss_func()
 
-    def build_loss_func(self):
-        self.loss_func = ChamferDistanceL2()
+    # def build_loss_func(self):
+    #     self.loss_func = ChamferDistanceL2()
 
     def get_loss(self, ret, gt, epoch=0):
-        loss_coarse = self.loss_func(ret[0], gt)
-        loss_fine = self.loss_func(ret[1], gt)
+        loss_coarse = chamfer_distance(ret[0], gt, norm=self.cd_norm)[0]
+        loss_fine = chamfer_distance(ret[1], gt, norm=self.cd_norm)[0]
         return loss_coarse, loss_fine
+
 
     def forward(self, xyz):
         bs , n , _ = xyz.shape

@@ -44,6 +44,7 @@ class TeethSegDataset(Dataset):
             tooth_range=None, 
             num_points_gt=1024, 
             num_points_corr=1024, 
+            num_points_corr_type='full', # 'full' or 'single
             num_points_orig=8192,
             gt_type='single', 
             data_type='npy',
@@ -76,7 +77,9 @@ class TeethSegDataset(Dataset):
         # USER INPUT
         self.tooth_range = copy.deepcopy(tooth_range) if tooth_range is not None else {'corr': '1-7', 'gt': '1-7', 'jaw': 'lower','quadrants': 'all'}
         self.num_points_gt = num_points_gt
-        self.num_points_corr = num_points_corr
+        assert num_points_corr_type in ['full', 'single'], "num_points_corr_type must be either 'full' or 'single'."
+        self.num_points_corr_single = num_points_corr if num_points_corr_type == 'single' else None
+        self.num_points_corr = num_points_corr if num_points_corr_type == 'full' else None
         self.num_points_orig = num_points_orig
         self.gt_type = gt_type
         assert self.gt_type in ['single', 'full'], "Single tooth or fullband ground truth is supported."
@@ -140,7 +143,13 @@ class TeethSegDataset(Dataset):
                     self.toothlist[range_type] = sorted(list(set(self.toothlist[range_type])))
 
         # print(self.toothlist)
-        print(f'Current toothlist: {self.toothlist}')
+        print('Current toothlist:', end=' ')
+        pprint(self.toothlist)
+
+        if self.num_points_corr_single is not None:
+            self.num_points_corr = self.num_points_corr_single*(len(self.toothlist['corr'])-1) 
+        print(f'Number of points for corr: {self.num_points_corr}')
+        print(f'Number of points for gt: {self.num_points_gt}')
 
         # create data_filter list if it does not exist
         if not op.exists(self.data_filter_path):
@@ -248,6 +257,7 @@ class TeethSegDataset(Dataset):
             # this is about 4 times faster than downsampling the whole set at once
 
             batchsize = pcd.shape[0]
+
             num_points_tmp = torch.ones(batchsize)*num_points/batchsize
             num_points_tmp = torch.ceil(num_points_tmp).int().to(self.device)
 
@@ -289,7 +299,12 @@ class TeethSegDataset(Dataset):
                     continue
             
             corr_tensor = gt[filter_arr != tooth]
-            corr_tensor_sampled = self.downsample_batched_pcd(pcd=corr_tensor, num_points=self.num_points_corr, samplingmethod=self.samplingmethod, steps=self.downsample_steps)
+
+            if self.num_points_corr_single is not None:
+                # resample the single teeth from the sampled gts to the desired number of points and concat on the first dimension
+                corr_tensor_sampled = fps(corr_tensor, K=self.num_points_corr_single)[0].view(1,-1,3)
+            else:
+                corr_tensor_sampled = self.downsample_batched_pcd(pcd=corr_tensor, num_points=self.num_points_corr, samplingmethod=self.samplingmethod, steps=self.downsample_steps)
 
             corr = torch.cat((corr, corr_tensor_sampled), dim=0)
 

@@ -100,9 +100,12 @@ def run_net(args, config):
                 ret = base_model(partial)
                 sparse_loss, dense_loss = base_model.module.get_loss(ret, gt, epoch)    
             
-            _loss = sparse_loss + getattr(config, 'dense_loss_coeff', 1)*dense_loss 
-
-            # _loss = sparse_loss + dense_loss 
+            # denseloss coeff is applied in model for adapointr
+            if config.model.NAME == 'AdaPoinTr':
+                _loss = sparse_loss + dense_loss
+            else:
+                _loss = sparse_loss + config.dense_loss_coeff*dense_loss 
+            
             _loss.backward()
 
             # forward
@@ -128,7 +131,11 @@ def run_net(args, config):
             batch_start_time = time.time()
 
             # epoch progress
-            print(f'\r[Epoch {epoch}/{config.max_epoch}][Batch {idx}/{n_batches}] BatchTime = {format_duration(batch_time.val(-1))} Losses = {[f"{l:.4f}"  for l in losses.val()]} lr = {optimizer.param_groups[0]["lr"]:.6f}', end="\r")
+            if not args.sweep:
+                print(f'\r[Epoch {epoch}/{config.max_epoch}][Batch {idx}/{n_batches}] BatchTime = {format_duration(batch_time.val(-1))} Losses = {[f"{l:.4f}"  for l in losses.val()]} lr = {optimizer.param_groups[0]["lr"]:.6f}', end="\r")
+
+        if args.sweep:
+            print(f'\rAgent: {wandb.run.id} Epoch [{epoch}/{config.max_epoch}] Losses = {[f"{l:.4f}"  for l in losses.val()]} lr = {optimizer.param_groups[0]["lr"]:.6f}')
 
             if config.scheduler.type == 'GradualWarmup':
                 if n_itr < config.scheduler.kwargs_2.total_epoch:
@@ -141,19 +148,15 @@ def run_net(args, config):
             scheduler.step()
         epoch_end_time = time.time()
         
-
-
-
         if epoch % args.val_freq == 0:
             # Validate the current model
             metrics = validate(base_model, val_dataloader, epoch, args, config)
 
             # Save ckeckpoints
             if metrics.better_than(best_metrics):
-                suffix = wandb.run.name if args.sweep else ''
                 best_metrics = metrics
                 if args.save_checkpoints:
-                    builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, f'ckpt-best{suffix}', args)
+                    builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, f'ckpt-best-{wandb.run.name}', args)
 
         if args.test_freq is not None and epoch % args.test_freq == 0:
             metrics = test(base_model, test_dataloader, args, config, epoch=epoch)
@@ -163,10 +166,10 @@ def run_net(args, config):
             builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, 'ckpt-last', args)  
             # save every 100 epoch
             if epoch % 100 == 0 and epoch != 0:
-                builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, f'ckpt-epoch-{epoch:03d}', args)  
+                builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, f'ckpt-epoch-{epoch:03d}-{wandb.run.name}', args)  
 
             if (config.max_epoch - epoch) < 2:
-                builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, f'ckpt-epoch-{epoch:03d}', args)   
+                builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, f'ckpt-epoch-{epoch:03d}-{wandb.run.name}', args)   
 
         epoch_allincl_end_time = time.time()
 
@@ -194,7 +197,7 @@ def validate(base_model, val_dataloader, epoch, args, config, logger = None):
     val_metrics = AverageMeter(Metrics.names())
 
     with torch.no_grad():
-        for data in val_dataloader:
+        for idx, data in enumerate(val_dataloader):
 
             partial = data[0].to(args.device)
             gt = data[1].to(args.device)
@@ -204,6 +207,14 @@ def validate(base_model, val_dataloader, epoch, args, config, logger = None):
             coarse_points = ret[0]
             dense_points = ret[-1]
 
+            if idx == 0:
+                full_dense = torch.cat([partial, dense_points], dim=1)
+                wandb.log({"val/dense": wandb.Object3D({"type": "lidar/beta","points": dense_points[0].detach().cpu().numpy(),})})
+                wandb.log({"val/coarse": wandb.Object3D({"type": "lidar/beta","points": coarse_points[0].detach().cpu().numpy(),})})
+                wandb.log({"val/gt": wandb.Object3D({"type": "lidar/beta","points": gt[0].detach().cpu().numpy(),})})
+                wandb.log({"val/partial": wandb.Object3D({"type": "lidar/beta","points": partial[0].detach().cpu().numpy(),})})
+                wandb.log({"val/full-dense": wandb.Object3D({"type": "lidar/beta","points": full_dense[0].detach().cpu().numpy(),})})
+                
             sparse_loss_l1 =  chamfer_distance(coarse_points, gt, norm=1)[0]
             sparse_loss_l2 =  chamfer_distance(coarse_points, gt, norm=2)[0]
             dense_loss_l1 =  chamfer_distance(dense_points, gt, norm=1)[0]
@@ -250,7 +261,7 @@ crop_ratio = {
 }
 
 def test_net(args, config):
-    logger = get_logger(args.log_name)
+    # logger = get_logger(args.log_name)
     print('Tester start ... ')
     _, test_dataloader = builder.dataset_builder(args, config.dataset, mode='test')
  

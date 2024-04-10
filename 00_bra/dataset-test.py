@@ -19,7 +19,7 @@ pada = import_dir_path()
 sys.path.append(pada.models.pointr.repo_dir)
 from tools import builder
 from tools.inference import inference_single
-from datasets.TeethSegDataset import TeethSeg
+from datasets.TeethSegDataset import TeethSegDataset
 
 if __name__ == '__main__':
 
