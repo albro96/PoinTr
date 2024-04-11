@@ -12,7 +12,7 @@ from os_tools.import_dir_path import import_dir_path
 # change to the directory of this file
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-def run_agent(gpu_num, sweep_id, project=None, entity=None,  count=2):
+def run_agent(gpu_num, sweep_id, project=None, entity=None,  count=50):
     """
     Run the agent on the specified GPU.
 
@@ -34,8 +34,8 @@ def run_agent(gpu_num, sweep_id, project=None, entity=None,  count=2):
 
 if __name__ == '__main__':
 
-    resume_data = None #{'entity': 'albro96', 'project': 'PoinTr', 'sweep_id': 'wxb8uwm7'}
-    resume = False
+    resume_data = {'entity': 'albro96', 'project': 'ToothRecon', 'sweep_id': 'i6puicfz'}
+    resume = True
 
 
     pada = import_dir_path()
@@ -118,7 +118,7 @@ if __name__ == '__main__':
     else:
         print('Resuming sweep with sweep-parameters: ', resume_data)
 
-    gpus = [0,1,2,3] # number of gpus or list of gpus
+    gpus = [1,2,3] # number of gpus or list of gpus
     
     if isinstance(gpus, int):
         gpus = list(range(gpus))

@@ -211,9 +211,13 @@ def validate(base_model, val_dataloader, epoch, args, config, logger = None):
                 full_dense = torch.cat([partial, dense_points], dim=1)
                 wandb.log({"val/dense": wandb.Object3D({"type": "lidar/beta","points": dense_points[0].detach().cpu().numpy(),})})
                 wandb.log({"val/coarse": wandb.Object3D({"type": "lidar/beta","points": coarse_points[0].detach().cpu().numpy(),})})
-                wandb.log({"val/gt": wandb.Object3D({"type": "lidar/beta","points": gt[0].detach().cpu().numpy(),})})
-                wandb.log({"val/partial": wandb.Object3D({"type": "lidar/beta","points": partial[0].detach().cpu().numpy(),})})
                 wandb.log({"val/full-dense": wandb.Object3D({"type": "lidar/beta","points": full_dense[0].detach().cpu().numpy(),})})
+
+                if not args.gt_partial_saved:
+                    # save gt and partial only once
+                    wandb.log({"val/gt": wandb.Object3D({"type": "lidar/beta","points": gt[0].detach().cpu().numpy(),})})
+                    wandb.log({"val/partial": wandb.Object3D({"type": "lidar/beta","points": partial[0].detach().cpu().numpy(),})})
+                    args.gt_partial_saved = True
                 
             sparse_loss_l1 =  chamfer_distance(coarse_points, gt, norm=1)[0]
             sparse_loss_l2 =  chamfer_distance(coarse_points, gt, norm=2)[0]

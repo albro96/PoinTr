@@ -69,6 +69,7 @@ def main(rank=0, world_size=1):
         'save_only_best': True,
         'ckpt_dir': None,
         'cfg_dir': None,
+        'gt_partial_saved': False,
     })
 
     config = EasyDict({
