@@ -12,7 +12,7 @@ from pprint import pprint
 import numpy as np
 
 sys.path.append('/storage/share/code/01_scripts/modules/')
-from os_tools.import_dir_path import import_dir_path
+from os_tools.import_dir_path import import_dir_path, convert_path
 
 pada = import_dir_path()
 
@@ -21,15 +21,21 @@ from tools import builder
 from tools.inference import inference_single
 from datasets.TeethSegDataset import TeethSegDataset
 
+import open3d as o3d
+# from pcd_tools.visualizer import ObjectVisualizer
+
+save_dir = convert_path(r'O:\nobackup\data\3DTeethSeg22\testdata-full')
+
 if __name__ == '__main__':
 
     device = torch.device('cuda:0')
 
     tooth_ranges = [
-        {'corr': '1-7', 'gt': [41,1], 'jaw': 'lower', 'quadrants': [3,4]},
+        {'corr': '31-33', 'gt': [32], 'jaw': 'lower', 'quadrants': [3,4]},
     ]
+
     num_pts = [
-        {'gt': 128, 'corr': 128},
+        {'gt': 1023, 'corr': 2048},
         # {'gt': 4096, 'corr': 16384},
     ]
 
@@ -39,41 +45,47 @@ if __name__ == '__main__':
             # num_pt = copy.deepcopy(num_pt)
             # print(f'Loading dataset with tooth_range: {tooth_range} and num_points: {num_pt}')
             train_set = TeethSegDataset(
-                mode='train',
+                mode='test',
                 tooth_range=tooth_range,
                 num_points_corr=num_pt['corr'],
                 num_points_gt=num_pt['gt'],
-                gt_type='full',
+                num_points_gt_type='single',
+                num_points_corr_type='full',
+                gt_type= 'single', #'full',
                 device=device,
-                splits={'train': 0.8, 'val': 0.1},
+                use_fixed_split=True,
+                splits=None, #{'train': 0.8, 'val': 0.1},
                 enable_cache=False,
                 create_cache_file=True
             )
 
-    import open3d as o3d
-    from pcd_tools.visualizer import ObjectVisualizer
+            for idx, data in enumerate(train_set):
+                # print(data[0].shape, data[1].shape)
+                full = data[0].cpu().numpy()
 
-    train_loader = torch.utils.data.DataLoader(
-            train_set, 
-            batch_size=1,
-            shuffle=False, 
-            pin_memory=False,
-            num_workers=0)
 
-    for epoch in range(1):
-        t0 = time.time()
-        for i, data in enumerate(train_loader):
-            # gt = data[0].to(device)
-            # corr = data[1].to(device)
-            print(data[0].shape, data[1].shape)
+
+    # train_loader = torch.utils.data.DataLoader(
+    #         train_set, 
+    #         batch_size=1,
+    #         shuffle=False, 
+    #         pin_memory=False,
+    #         num_workers=0)
+
+    # for epoch in range(1):
+    #     t0 = time.time()
+    #     for i, data in enumerate(train_loader):
+    #         # gt = data[0].to(device)
+    #         # corr = data[1].to(device)
+    #         print(data[0].shape, data[1].shape)
             
-            pcd = o3d.geometry.PointCloud()
-            pcd.points = o3d.utility.Vector3dVector(data[0][0])
-            visu = ObjectVisualizer()
-            visu.load_obj(obj=pcd, dtype='pcd')
-            visu.show()
-            # visu.screenshot(save_path='/storage/share/nobackup/data/3DTeethSeg22/test.png')
-            break
+    #         pcd = o3d.geometry.PointCloud()
+    #         pcd.points = o3d.utility.Vector3dVector(data[0][0])
+    #         visu = ObjectVisualizer()
+    #         visu.load_obj(obj=pcd, dtype='pcd')
+    #         visu.show()
+    #         # visu.screenshot(save_path='/storage/share/nobackup/data/3DTeethSeg22/test.png')
+    #         break
 
     #         # visulist = []
     #         # for num in range(2):

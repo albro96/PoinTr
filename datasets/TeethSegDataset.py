@@ -44,12 +44,14 @@ class TeethSegDataset(Dataset):
             tooth_range=None, 
             num_points_gt=1024, 
             num_points_corr=1024, 
-            num_points_corr_type='full', # 'full' or 'single
+            num_points_corr_type='single', # 'full' or 'single
+            num_points_gt_type='single', # 'full' or 'single
             num_points_orig=8192,
             gt_type='single', 
             data_type='npy',
             samplingmethod='fps',
             downsample_steps=2,
+            use_fixed_split=True,
             splits=None, 
             enable_cache=True, 
             create_cache_file=False,
@@ -69,25 +71,40 @@ class TeethSegDataset(Dataset):
         self.downsample_steps = downsample_steps
         self.data_filter_path = pada.datasets.TeethSeg22.data_filter_path
         self.toothlabels_path = pada.datasets.TeethSeg22.toothlabels_path
+        self.data_split_path = pada.datasets.TeethSeg22.data_split_path
         self.device = device if device is not None else torch.device('cpu')
+        self.warning_list = []
         
         if self.device.type == 'cpu':
             print('Using CPU. This will slow down the data loading process. Consider using CUDA.')
 
         # USER INPUT
         self.tooth_range = copy.deepcopy(tooth_range) if tooth_range is not None else {'corr': '1-7', 'gt': '1-7', 'jaw': 'lower','quadrants': 'all'}
-        self.num_points_gt = num_points_gt
+        
         assert num_points_corr_type in ['full', 'single'], "num_points_corr_type must be either 'full' or 'single'."
+        assert num_points_gt_type in ['full', 'single'], "num_points_gt_type must be either 'full' or 'single'."
+
+        self.num_points_gt = num_points_gt if num_points_gt_type == 'full' or gt_type == 'single' else None
+        self.num_points_gt_single = num_points_gt if num_points_gt_type == 'single' and gt_type == 'full' else None
+
         self.num_points_corr_single = num_points_corr if num_points_corr_type == 'single' else None
         self.num_points_corr = num_points_corr if num_points_corr_type == 'full' else None
+
         self.num_points_orig = num_points_orig
         self.gt_type = gt_type
         assert self.gt_type in ['single', 'full'], "Single tooth or fullband ground truth is supported."
         self.mode = mode
-        self.splits = {'train': 0.8,'val': 0.1, 'test': 0.1} if splits is None else splits
+        self.use_fixed_split = use_fixed_split
 
-        if 'test' not in self.splits.keys():
-            self.splits['test'] = 1 - sum(self.splits.values())
+        if self.use_fixed_split:
+            assert splits is None, "If use_fixed_split is True, splits must be None."
+            with open(self.data_split_path, 'r') as f:
+                self.fixed_splits_dict = json.load(f)
+        else:
+            self.splits = {'train': 0.8,'val': 0.1, 'test': 0.1} if splits is None else splits
+            if 'test' not in self.splits.keys():
+                self.splits['test'] = 1 - sum(self.splits.values())
+
 
         self.enable_cache = enable_cache      
 
@@ -142,12 +159,18 @@ class TeethSegDataset(Dataset):
                     # make sure that self.toothlist[range_type] is sorted and unique
                     self.toothlist[range_type] = sorted(list(set(self.toothlist[range_type])))
 
+        assert all([ele in self.toothlist['corr'] for ele in self.toothlist['gt']]), "All teeth in gt must be in corr."
+
         # print(self.toothlist)
         print('Current toothlist:', end=' ')
         pprint(self.toothlist)
 
+        if self.num_points_gt_single is not None:
+            self.num_points_gt = self.num_points_gt_single*(len(self.toothlist['corr']))
+
         if self.num_points_corr_single is not None:
             self.num_points_corr = self.num_points_corr_single*(len(self.toothlist['corr'])-1) 
+     
         print(f'Number of points for corr: {self.num_points_corr}')
         print(f'Number of points for gt: {self.num_points_gt}')
 
@@ -162,13 +185,16 @@ class TeethSegDataset(Dataset):
         # load data_filter list
         self.data_filter = pd.read_csv(filepath_or_buffer=self.data_filter_path, sep=';', usecols=['patient-filter']).dropna().reset_index(drop=True)
 
+        if self.use_fixed_split:
+            self.all_patients = self.fixed_splits_dict[self.mode]
+        else:
+            self.all_patients = self.data_filter['patient-filter'].tolist()
+
         # load the toothdict
         with open(self.toothlabels_path, 'r') as f:
             self.toothdict = EasyDict(json.load(f))
 
-        self.filterlist = sorted([patient for patient in self.data_filter['patient-filter'] if all(int(elem) in self.toothdict[patient] for elem in self.toothlist['corr'])])
-
-        assert np.sum([i for i in self.splits.values()]) == 1, "The sum of split ratios must be equal to 1."
+        self.filterlist = sorted([patient for patient in self.all_patients if all(int(elem) in self.toothdict[patient] for elem in self.toothlist['corr'])])
 
         self.patient_tooth_list = []
         for patient in self.filterlist:
@@ -176,16 +202,20 @@ class TeethSegDataset(Dataset):
                 self.patient_tooth_list.append([patient, tooth])
 
         self.num_samples = len(self.patient_tooth_list)
-        print(f'Number of samples [total]: {self.num_samples}')
 
-        # Calculate the indices where to split the array
-        splitnums = {'train': 0, 'val': 1, 'test': 2}
+        if not self.use_fixed_split:
+            assert np.sum([i for i in self.splits.values()]) == 1, "The sum of split ratios must be equal to 1."
+            print(f'Number of samples [total]: {self.num_samples}')
+            # Calculate the indices where to split the array
+            splitnums = {'train': 0, 'val': 1, 'test': 2}
 
-        train_index = int(self.num_samples*self.splits['train'])
-        val_index = train_index + int(self.num_samples*self.splits['val'])
+            train_index = int(self.num_samples*self.splits['train'])
+            val_index = train_index + int(self.num_samples*self.splits['val'])
 
-        patientlist_split = np.split(np.array(self.patient_tooth_list), [train_index, val_index])
-        self.patient_tooth_list = patientlist_split[splitnums[self.mode]].tolist()
+            patientlist_split = np.split(np.array(self.patient_tooth_list), [train_index, val_index])
+
+            self.patient_tooth_list = patientlist_split[splitnums[self.mode]].tolist()
+        
         print(f'Number of samples [{self.mode}]: {len(self.patient_tooth_list)}')
     
         if self.enable_cache:
@@ -235,6 +265,11 @@ class TeethSegDataset(Dataset):
     def __len__(self):
         return len(self.patient_tooth_list)
 
+    def _warning(self, message):
+        if message not in self.warning_list:
+            print(f'Warning: {message}')
+            self.warning_list.append(message)
+
     def downsample_batched_pcd(self, pcd, num_points, samplingmethod=None, steps=2):
         '''
         Downsamples the input data tensor to the specified number of points using the specified sampling method.
@@ -267,8 +302,8 @@ class TeethSegDataset(Dataset):
         if samplingmethod == 'fps':
             pcd = fps(pcd, K=num_points)[0]
         
-        return pcd
-        
+        return pcd      
+
 
     def load_patient_data(self, patient, corr_tooth=None):
         # create paths
@@ -284,7 +319,10 @@ class TeethSegDataset(Dataset):
         all_teeth_tensor = all_teeth_tensor.to(self.device)
 
         # start = time.time()
-        gt = fps(all_teeth_tensor, K=self.num_points_gt)[0]
+        if self.num_points_gt_single is not None:
+            gt = fps(all_teeth_tensor, K=self.num_points_gt_single)[0]
+        else:
+            gt = fps(all_teeth_tensor, K=self.num_points_gt)[0]
 
         corr = torch.empty(0, self.num_points_corr, 3).to(self.device)
 
@@ -301,9 +339,16 @@ class TeethSegDataset(Dataset):
             corr_tensor = gt[filter_arr != tooth]
 
             if self.num_points_corr_single is not None:
+                if gt.shape[1] < self.num_points_corr_single:
+                    self._warning('Less points in gt than desired number of single points for corr. Using all teeth tensor for downsampling.')
+                    corr_tensor = all_teeth_tensor[filter_arr != tooth]
                 # resample the single teeth from the sampled gts to the desired number of points and concat on the first dimension
                 corr_tensor_sampled = fps(corr_tensor, K=self.num_points_corr_single)[0].view(1,-1,3)
             else:
+                if gt.shape[1] < self.num_points_corr/np.sum(filter_arr != tooth):
+                    self._warning('Less points in gt than desired number of single points for corr. Using all teeth tensor for downsampling.')
+                    corr_tensor = all_teeth_tensor[filter_arr != tooth]
+
                 corr_tensor_sampled = self.downsample_batched_pcd(pcd=corr_tensor, num_points=self.num_points_corr, samplingmethod=self.samplingmethod, steps=self.downsample_steps)
 
             corr = torch.cat((corr, corr_tensor_sampled), dim=0)
@@ -324,7 +369,7 @@ class TeethSegDataset(Dataset):
             if corr_tooth is not None: 
                 return corr.squeeze(0), gt.squeeze(0) 
             else:
-                return corr, gt, 
+                return corr, gt
         
     def load_cache(self):
         # load cache     

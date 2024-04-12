@@ -128,9 +128,15 @@ for ckpt_type in ckpt_types:
                 ret = base_model(corr.to(args.device.lower()))
                 pred = ret[-1] #.squeeze(0).detach().cpu().numpy()
 
+                # evaluate performance
+                # if data_config.gt_type == 'single':
+                    
                 corr = corr.detach().cpu()
                 gt = gt.detach().cpu()
                 pred = pred.detach().cpu()
+
+
+
                 
                 for data, name in zip([corr, gt, pred], ['corr', 'gt', 'pred']):
                     pcd = o3d.geometry.PointCloud()
