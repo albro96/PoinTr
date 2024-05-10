@@ -70,7 +70,7 @@ class TeethSegDataset(Dataset):
         self.samplingmethod = samplingmethod
         self.downsample_steps = downsample_steps
         self.data_filter_path = pada.datasets.TeethSeg22.data_filter_path
-        self.toothlabels_path = pada.datasets.TeethSeg22.toothlabels_path
+        self.toothlabels_path = pada.datasets.TeethSeg22.toothlabels_filtered_path
         self.data_split_path = pada.datasets.TeethSeg22.data_split_path
         self.device = device if device is not None else torch.device('cpu')
         self.warning_list = []
@@ -158,6 +158,8 @@ class TeethSegDataset(Dataset):
                         
                     # make sure that self.toothlist[range_type] is sorted and unique
                     self.toothlist[range_type] = sorted(list(set(self.toothlist[range_type])))
+            # else:
+            #     self.toothlist[range_type] = 'full'
 
         assert all([ele in self.toothlist['corr'] for ele in self.toothlist['gt']]), "All teeth in gt must be in corr."
 
@@ -194,12 +196,15 @@ class TeethSegDataset(Dataset):
         with open(self.toothlabels_path, 'r') as f:
             self.toothdict = EasyDict(json.load(f))
 
-        self.filterlist = sorted([patient for patient in self.all_patients if all(int(elem) in self.toothdict[patient] for elem in self.toothlist['corr'])])
+        # only get patients that have all teeth in the corr toothlist
+        self.filterlist = sorted([patient for patient in self.all_patients if all(int(elem) in self.toothdict[patient]['corr'] for elem in self.toothlist['corr'])])
 
         self.patient_tooth_list = []
         for patient in self.filterlist:
             for tooth in self.toothlist['gt']:
-                self.patient_tooth_list.append([patient, tooth])
+                # only add a patient tooth pair if the tooth is suitable for the gt
+                if tooth in self.toothdict[patient]['gt']:
+                    self.patient_tooth_list.append([patient, tooth])
 
         self.num_samples = len(self.patient_tooth_list)
 
