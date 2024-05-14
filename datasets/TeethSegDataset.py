@@ -78,9 +78,21 @@ class TeethSegDataset(Dataset):
         if self.device.type == 'cpu':
             print('Using CPU. This will slow down the data loading process. Consider using CUDA.')
 
+        assert tooth_range is not None, "Tooth range must be specified in this format: {'corr': '1-6', 'gt': [1,2,3], 'jaw': 'lower', 'quadrants': 'all'}"
+
         # USER INPUT
-        self.tooth_range = copy.deepcopy(tooth_range) if tooth_range is not None else {'corr': '1-7', 'gt': '1-7', 'jaw': 'lower','quadrants': 'all'}
-        
+        self.tooth_range = copy.deepcopy(tooth_range)
+
+        if self.tooth_range['corr'] == 'full':
+            assert num_points_corr_type == 'full', "If tooth range is full, num_points_corr_type must be full."
+
+        if self.tooth_range['gt'] == 'full':
+            assert num_points_gt_type == 'full' or gt_type == 'single', "If tooth range is full and gt_type is full, num_points_gt_type must be full."
+
+        # load the toothdict
+        with open(self.toothlabels_path, 'r') as f:
+            self.toothdict = EasyDict(json.load(f))
+
         assert num_points_corr_type in ['full', 'single'], "num_points_corr_type must be either 'full' or 'single'."
         assert num_points_gt_type in ['full', 'single'], "num_points_gt_type must be either 'full' or 'single'."
 
@@ -158,23 +170,20 @@ class TeethSegDataset(Dataset):
                         
                     # make sure that self.toothlist[range_type] is sorted and unique
                     self.toothlist[range_type] = sorted(list(set(self.toothlist[range_type])))
-            # else:
-            #     self.toothlist[range_type] = 'full'
+            else:
+                self.toothlist[range_type] = []
+                for quadrant in self.tooth_range['quadrants']:
+                    assert quadrant in self.quad_dict[self.tooth_range['jaw']]
+                    self.toothlist[range_type].extend([int(f'{quadrant}{tooth}') for tooth in range(1,9)])
+     
 
-        assert all([ele in self.toothlist['corr'] for ele in self.toothlist['gt']]), "All teeth in gt must be in corr."
+        # uncomment again after full implementation
+        # assert all([ele in self.toothlist['corr'] for ele in self.toothlist['gt']]), "All teeth in gt must be in corr."
+
 
         # print(self.toothlist)
         print('Current toothlist:', end=' ')
         pprint(self.toothlist)
-
-        if self.num_points_gt_single is not None:
-            self.num_points_gt = self.num_points_gt_single*(len(self.toothlist['corr']))
-
-        if self.num_points_corr_single is not None:
-            self.num_points_corr = self.num_points_corr_single*(len(self.toothlist['corr'])-1) 
-     
-        print(f'Number of points for corr: {self.num_points_corr}')
-        print(f'Number of points for gt: {self.num_points_gt}')
 
         # create data_filter list if it does not exist
         if not op.exists(self.data_filter_path):
@@ -192,21 +201,52 @@ class TeethSegDataset(Dataset):
         else:
             self.all_patients = self.data_filter['patient-filter'].tolist()
 
-        # load the toothdict
-        with open(self.toothlabels_path, 'r') as f:
-            self.toothdict = EasyDict(json.load(f))
+        for patient in self.all_patients:
+            cond1 = any([int(tooth) for tooth in self.toothdict[patient]['gt'] if int(tooth) in self.toothlist['gt']])
+            cond2 = any([int(tooth) for tooth in self.toothdict[patient]['corr'] if int(tooth) in self.toothlist['corr']])
+            if not cond1 or not cond2:
+                print(f'Removing patient {patient} from list. Reason: No teeth in toothlist.')
+                # remove patients that do not have any teeth in the gt toothlist
+                self.all_patients.remove(patient)
+                
+        if self.tooth_range['corr'] != 'full':
+            # only get patients that have all teeth in the corr toothlist
+            self.filterlist = sorted([patient for patient in self.all_patients if all(int(elem) in self.toothdict[patient]['corr'] for elem in self.toothlist['corr'])])
+            for patient in self.filterlist:
+                self.toothdict[patient]['corr-filtered'] = self.toothlist['corr']
+        else:
+            self.filterlist = self.all_patients
+            for patient in self.filterlist:
+                self.toothdict[patient]['corr-filtered'] = [int(tooth) for tooth in self.toothdict[patient]['corr'] if int(tooth) in self.toothlist['corr']]
 
-        # only get patients that have all teeth in the corr toothlist
-        self.filterlist = sorted([patient for patient in self.all_patients if all(int(elem) in self.toothdict[patient]['corr'] for elem in self.toothlist['corr'])])
 
         self.patient_tooth_list = []
-        for patient in self.filterlist:
-            for tooth in self.toothlist['gt']:
-                # only add a patient tooth pair if the tooth is suitable for the gt
-                if tooth in self.toothdict[patient]['gt']:
+
+        if self.tooth_range['gt'] != 'full':
+            for patient in self.filterlist:
+                for tooth in self.toothlist['gt']:
+                    # only add a patient tooth pair if the tooth is suitable for the gt
+                    if tooth in self.toothdict[patient]['gt']:
+                        self.patient_tooth_list.append([patient, tooth])
+                self.toothdict[patient]['gt-filtered'] = self.toothlist['gt']
+        else:
+            for patient in self.filterlist:
+                self.toothdict[patient]['gt-filtered'] = [int(tooth) for tooth in self.toothdict[patient]['gt'] if int(tooth) in self.toothlist['gt']]
+
+                for tooth in self.toothdict[patient]['gt-filtered']:
                     self.patient_tooth_list.append([patient, tooth])
 
         self.num_samples = len(self.patient_tooth_list)
+
+        if self.num_points_gt_single is not None:
+            self.num_points_gt = self.num_points_gt_single*(len(self.toothlist['corr']))
+
+        if self.num_points_corr_single is not None:
+            self.num_points_corr = self.num_points_corr_single*(len(self.toothlist['corr'])-1) 
+     
+        print(f'Number of points for corr: {self.num_points_corr}')
+        print(f'Number of points for gt: {self.num_points_gt}')
+
 
         if not self.use_fixed_split:
             assert np.sum([i for i in self.splits.values()]) == 1, "The sum of split ratios must be equal to 1."
@@ -222,6 +262,7 @@ class TeethSegDataset(Dataset):
             self.patient_tooth_list = patientlist_split[splitnums[self.mode]].tolist()
         
         print(f'Number of samples [{self.mode}]: {len(self.patient_tooth_list)}')
+        print(f'Number of patients [{self.mode}]: {len(set([patient for patient, tooth in self.patient_tooth_list]))}')
     
         if self.enable_cache:
             cache_len = self.num_samples
@@ -232,6 +273,9 @@ class TeethSegDataset(Dataset):
             cache_dict = {key: value for key, value in self.__dict__.items() if key in relevant_keys}
 
             cache_dict['filterlist'] = sorted(self.filterlist)
+
+            for key in ['corr', 'gt']:
+                cache_dict[f'corr-full'] = True if self.tooth_range[key] == 'full' else False
 
             self.cache_hash = sha256(json.dumps(cache_dict, sort_keys=True).encode()).hexdigest()[:8]
             print(f'Current data-cache hash: {self.cache_hash}')
@@ -258,12 +302,13 @@ class TeethSegDataset(Dataset):
                 print('Overwriting cache files...')
                 self.save_cache()
 
-            # Split the array
-            gt_split = np.split(self.shared_array_gt, [train_index, val_index])
-            corr_split = np.split(self.shared_array_corr, [train_index, val_index])
+            # dont need this, as the cache is loaded with mode specific patients already
+            # # Split the array
+            # gt_split = np.split(self.shared_array_gt, [train_index, val_index])
+            # corr_split = np.split(self.shared_array_corr, [train_index, val_index])
 
-            self.shared_array_corr = corr_split[splitnums[self.mode]]
-            self.shared_array_gt = gt_split[splitnums[self.mode]]
+            # self.shared_array_corr = corr_split[splitnums[self.mode]]
+            # self.shared_array_gt = gt_split[splitnums[self.mode]]
         
      
 
@@ -314,7 +359,8 @@ class TeethSegDataset(Dataset):
         # create paths
         all_teeth_tensor = torch.empty(0, self.num_points_orig, 3)
         # start = time.time()
-        for tooth in self.toothlist['corr']:
+        print(patient, self.toothdict[patient]['corr-filtered'])
+        for tooth in self.toothdict[patient]['corr-filtered']:
             pcd_path = op.join(self.data_dir, f'{self.data_type}_{self.num_points_orig}',patient, f"{tooth}.{self.data_type}")
             tooth_tensor = torch.from_numpy(np.load(pcd_path)).unsqueeze(0)
             all_teeth_tensor = torch.cat((all_teeth_tensor, tooth_tensor), dim=0)
@@ -323,6 +369,7 @@ class TeethSegDataset(Dataset):
 
         all_teeth_tensor = all_teeth_tensor.to(self.device)
 
+        print(all_teeth_tensor.shape)
         # start = time.time()
         if self.num_points_gt_single is not None:
             gt = fps(all_teeth_tensor, K=self.num_points_gt_single)[0]
@@ -331,12 +378,14 @@ class TeethSegDataset(Dataset):
 
         corr = torch.empty(0, self.num_points_corr, 3).to(self.device)
 
-        filter_arr = np.array(self.toothlist['corr']) 
-        filter_arr_gt = np.array(self.toothlist['gt'])
+        filter_arr = np.array(self.toothdict[patient]['corr-filtered']) # if range is not full, this is toothlist['corr']
+
+        filter_arr_gt = np.array(self.toothdict[patient]['gt-filtered'])
+
         # get indices of filter_arr that are in filter_arr_gt
         indices_gt = np.where(np.isin(filter_arr, filter_arr_gt))[0]
 
-        for tooth in self.toothlist['gt']:
+        for tooth in self.toothdict[patient]['gt-filtered']:
             if corr_tooth is not None:
                 if tooth != corr_tooth:
                     continue
@@ -386,14 +435,19 @@ class TeethSegDataset(Dataset):
             self.shared_array_corr = torch.load(self.cache_path_corr)
         else:
             print('Loading data for cache ...')
-            for idx, patient in enumerate(tqdm(self.filterlist)):
-                idx_ref = len(self.toothlist['gt'])
-                start = idx*idx_ref 
+            start = 0
+            for patient in tqdm(self.filterlist):
+                idx_ref = len(self.toothdict[patient]['gt-filtered'])
+            
                 end = start+idx_ref
 
                 corr, gt = self.load_patient_data(patient)
                 self.shared_array_gt[start:end] = gt
-                self.shared_array_corr[start:end] = corr        
+                self.shared_array_corr[start:end] = corr 
+
+                start = end
+                
+                      
 
     def save_cache(self):
         print(f'Saving cache to: \nGT:\t{self.cache_path_gt}\nCORR:\t{self.cache_path_corr}')

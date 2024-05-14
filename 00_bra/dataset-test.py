@@ -31,11 +31,11 @@ if __name__ == '__main__':
     device = torch.device('cuda:0')
 
     tooth_ranges = [
-        {'corr': '31-33', 'gt': [32], 'jaw': 'lower', 'quadrants': [3,4]},
+        {'corr': 'full', 'gt': 'full', 'jaw': 'lower', 'quadrants': [3,4]},
     ]
 
     num_pts = [
-        {'gt': 1023, 'corr': 2048},
+        {'gt': 512, 'corr': 512},
         # {'gt': 4096, 'corr': 16384},
     ]
 
@@ -45,7 +45,7 @@ if __name__ == '__main__':
             # num_pt = copy.deepcopy(num_pt)
             # print(f'Loading dataset with tooth_range: {tooth_range} and num_points: {num_pt}')
             train_set = TeethSegDataset(
-                mode='test',
+                mode='train',
                 tooth_range=tooth_range,
                 num_points_corr=num_pt['corr'],
                 num_points_gt=num_pt['gt'],
@@ -54,14 +54,13 @@ if __name__ == '__main__':
                 gt_type= 'single', #'full',
                 device=device,
                 use_fixed_split=True,
-                splits=None, #{'train': 0.8, 'val': 0.1},
                 enable_cache=False,
                 create_cache_file=True
             )
 
-            for idx, data in enumerate(train_set):
-                # print(data[0].shape, data[1].shape)
-                full = data[0].cpu().numpy()
+            # for idx, data in enumerate(train_set):
+            #     print(data[0].shape, data[1].shape)
+                # full = data[0].cpu().numpy()
 
 
 
