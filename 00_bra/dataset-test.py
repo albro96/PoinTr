@@ -11,7 +11,7 @@ import time
 from pprint import pprint
 import numpy as np
 
-sys.path.append('/storage/share/code/01_scripts/modules/')
+sys.path.append("/storage/share/code/01_scripts/modules/")
 from os_tools.import_dir_path import import_dir_path, convert_path
 
 pada = import_dir_path()
@@ -22,20 +22,23 @@ from tools.inference import inference_single
 from datasets.TeethSegDataset import TeethSegDataset
 
 import open3d as o3d
+
 # from pcd_tools.visualizer import ObjectVisualizer
 
-save_dir = convert_path(r'O:\nobackup\data\3DTeethSeg22\testdata-full')
+save_dir = convert_path(r"O:\nobackup\data\3DTeethSeg22\testdata")
 
-if __name__ == '__main__':
+os.makedirs(save_dir, exist_ok=True)
 
-    device = torch.device('cuda:0')
+if __name__ == "__main__":
+
+    device = torch.device("cuda:0")
 
     tooth_ranges = [
-        {'corr': 'full', 'gt': 'full', 'jaw': 'lower', 'quadrants': [3,4]},
+        {"corr": "full", "gt": "full", "jaw": "lower", "quadrants": [3, 4]},
     ]
 
     num_pts = [
-        {'gt': 512, 'corr': 512},
+        {"gt": 1024, "corr": 16384},
         # {'gt': 4096, 'corr': 16384},
     ]
 
@@ -45,29 +48,39 @@ if __name__ == '__main__':
             # num_pt = copy.deepcopy(num_pt)
             # print(f'Loading dataset with tooth_range: {tooth_range} and num_points: {num_pt}')
             train_set = TeethSegDataset(
-                mode='train',
+                mode="train",
                 tooth_range=tooth_range,
-                num_points_corr=num_pt['corr'],
-                num_points_gt=num_pt['gt'],
-                num_points_gt_type='single',
-                num_points_corr_type='full',
-                gt_type= 'single', #'full',
+                num_points_corr=num_pt["corr"],
+                num_points_gt=num_pt["gt"],
+                num_points_gt_type="single",
+                num_points_corr_type="full",
+                gt_type="single",  #'full',
                 device=device,
                 use_fixed_split=True,
                 enable_cache=False,
-                create_cache_file=True
+                create_cache_file=True,
             )
 
-            # for idx, data in enumerate(train_set):
-            #     print(data[0].shape, data[1].shape)
-                # full = data[0].cpu().numpy()
+            for idx, data in enumerate(train_set):
+                print(data[0].shape, data[1].shape)
+                pcd_corr = o3d.geometry.PointCloud()
+                pcd_corr.points = o3d.utility.Vector3dVector(data[0].cpu().numpy())
+                pcd_gt = o3d.geometry.PointCloud()
+                pcd_gt.points = o3d.utility.Vector3dVector(data[1].cpu().numpy())
 
+                # save pcds
+                o3d.io.write_point_cloud(
+                    op.join(save_dir, f"{idx:04d}_corr.pcd"), pcd_corr
+                )
 
+                o3d.io.write_point_cloud(op.join(save_dir, f"{idx:04d}_gt.pcd"), pcd_gt)
+
+            # full = data[0].cpu().numpy()
 
     # train_loader = torch.utils.data.DataLoader(
-    #         train_set, 
+    #         train_set,
     #         batch_size=1,
-    #         shuffle=False, 
+    #         shuffle=False,
     #         pin_memory=False,
     #         num_workers=0)
 
@@ -77,7 +90,7 @@ if __name__ == '__main__':
     #         # gt = data[0].to(device)
     #         # corr = data[1].to(device)
     #         print(data[0].shape, data[1].shape)
-            
+
     #         pcd = o3d.geometry.PointCloud()
     #         pcd.points = o3d.utility.Vector3dVector(data[0][0])
     #         visu = ObjectVisualizer()
@@ -93,10 +106,6 @@ if __name__ == '__main__':
     #         #     # visulist.append(pcd)
     #         #     visulist = [pcd]
     #         #     o3d.visualization.draw_geometries(visulist)
-  
-
-
-
 
 
 # params = [
