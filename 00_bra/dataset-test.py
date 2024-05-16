@@ -34,11 +34,11 @@ if __name__ == "__main__":
     device = torch.device("cuda:0")
 
     tooth_ranges = [
-        {"corr": "full", "gt": "full", "jaw": "lower", "quadrants": [3, 4]},
+        {"corr": "full", "gt": 'full', "jaw": "lower", "quadrants": [3, 4]},
     ]
 
     num_pts = [
-        {"gt": 1024, "corr": 16384},
+        {"gt": 2048, "corr": 16384},
         # {'gt': 4096, 'corr': 16384},
     ]
 
@@ -57,23 +57,35 @@ if __name__ == "__main__":
                 gt_type="single",  #'full',
                 device=device,
                 use_fixed_split=True,
-                enable_cache=False,
+                enable_cache=True,
                 create_cache_file=True,
             )
 
-            for idx, data in enumerate(train_set):
+            val_loader = torch.utils.data.DataLoader(
+                train_set,
+                batch_size=1,
+                shuffle=False,
+                pin_memory=True,
+                num_workers=0,
+            )
+
+            for idx, data in enumerate(val_loader):
                 print(data[0].shape, data[1].shape)
-                pcd_corr = o3d.geometry.PointCloud()
-                pcd_corr.points = o3d.utility.Vector3dVector(data[0].cpu().numpy())
-                pcd_gt = o3d.geometry.PointCloud()
-                pcd_gt.points = o3d.utility.Vector3dVector(data[1].cpu().numpy())
+                
+                print(val_loader.dataset.patient, val_loader.dataset.tooth)
 
-                # save pcds
-                o3d.io.write_point_cloud(
-                    op.join(save_dir, f"{idx:04d}_corr.pcd"), pcd_corr
-                )
+                
+                # pcd_corr = o3d.geometry.PointCloud()
+                # pcd_corr.points = o3d.utility.Vector3dVector(data[0].cpu().numpy())
+                # pcd_gt = o3d.geometry.PointCloud()
+                # pcd_gt.points = o3d.utility.Vector3dVector(data[1].cpu().numpy())
 
-                o3d.io.write_point_cloud(op.join(save_dir, f"{idx:04d}_gt.pcd"), pcd_gt)
+                # # save pcds
+                # o3d.io.write_point_cloud(
+                #     op.join(save_dir, f"{idx:04d}_corr.pcd"), pcd_corr
+                # )
+
+                # o3d.io.write_point_cloud(op.join(save_dir, f"{idx:04d}_gt.pcd"), pcd_gt)
 
             # full = data[0].cpu().numpy()
 

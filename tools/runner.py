@@ -86,7 +86,8 @@ def run_net(args, config):
         # base_model.train()  # set model to training mode
         n_batches = len(train_dataloader)
 
-        for idx, data in enumerate(train_dataloader):
+        for idx, data in enumerate(train_dataloader):            
+
             data_time.update(time.time() - batch_start_time)
             # npoints = config.dataset.train._base_.N_POINTS
             # dataset_name = config.dataset.train._base_.NAME
@@ -204,20 +205,17 @@ def validate(base_model, val_dataloader, epoch, args, config, logger = None):
 
             with torch.cuda.amp.autocast(enabled=args.use_amp_autocast):
                 ret = base_model(partial)
+
             coarse_points = ret[0]
             dense_points = ret[-1]
 
-            if idx == 0:
+            if val_dataloader.dataset.patient == '0U1LI1CB':
                 full_dense = torch.cat([partial, dense_points], dim=1)
-                wandb.log({"val/dense": wandb.Object3D({"type": "lidar/beta","points": dense_points[0].detach().cpu().numpy(),})})
-                wandb.log({"val/coarse": wandb.Object3D({"type": "lidar/beta","points": coarse_points[0].detach().cpu().numpy(),})})
-                wandb.log({"val/full-dense": wandb.Object3D({"type": "lidar/beta","points": full_dense[0].detach().cpu().numpy(),})})
-
-                if not args.gt_partial_saved:
-                    # save gt and partial only once
-                    wandb.log({"val/gt": wandb.Object3D({"type": "lidar/beta","points": gt[0].detach().cpu().numpy(),})})
-                    wandb.log({"val/partial": wandb.Object3D({"type": "lidar/beta","points": partial[0].detach().cpu().numpy(),})})
-                    args.gt_partial_saved = True
+                wandb.log({f"val/dense/{val_dataloader.dataset.tooth}": wandb.Object3D({"type": "lidar/beta","points": dense_points[0].detach().cpu().numpy(),})})
+                wandb.log({f"val/coarse/{val_dataloader.dataset.tooth}": wandb.Object3D({"type": "lidar/beta","points": coarse_points[0].detach().cpu().numpy(),})})
+                wandb.log({f"val/full-dense/{val_dataloader.dataset.tooth}": wandb.Object3D({"type": "lidar/beta","points": full_dense[0].detach().cpu().numpy(),})})
+                wandb.log({f"val/gt/{val_dataloader.dataset.tooth}": wandb.Object3D({"type": "lidar/beta","points": gt[0].detach().cpu().numpy(),})})
+                wandb.log({f"val/partial/{val_dataloader.dataset.tooth}": wandb.Object3D({"type": "lidar/beta","points": partial[0].detach().cpu().numpy(),})})
                 
             sparse_loss_l1 =  chamfer_distance(coarse_points, gt, norm=1)[0]
             sparse_loss_l2 =  chamfer_distance(coarse_points, gt, norm=2)[0]

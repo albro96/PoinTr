@@ -303,36 +303,27 @@ class TeethSegDataset(Dataset):
                     )
                 ]
             )
-            for patient in self.filterlist:
-                self.toothdict[patient]["corr-filtered"] = self.toothlist["corr"]
         else:
             self.filterlist = self.all_patients
-            for patient in self.filterlist:
-                self.toothdict[patient]["corr-filtered"] = [
-                    int(tooth)
-                    for tooth in self.toothdict[patient]["corr"]
-                    if int(tooth) in self.toothlist["corr"]
-                ]
+
+        for patient in self.filterlist:
+            self.toothdict[patient]["corr-filtered"] = [
+                int(tooth)
+                for tooth in self.toothdict[patient]["corr"]
+                if int(tooth) in self.toothlist["corr"]
+            ]
 
         self.patient_tooth_list = []
 
-        if self.tooth_range["gt"] != "full":
-            for patient in self.filterlist:
-                for tooth in self.toothlist["gt"]:
-                    # only add a patient tooth pair if the tooth is suitable for the gt
-                    if tooth in self.toothdict[patient]["gt"]:
-                        self.patient_tooth_list.append([patient, tooth])
-                self.toothdict[patient]["gt-filtered"] = self.toothlist["gt"]
-        else:
-            for patient in self.filterlist:
-                self.toothdict[patient]["gt-filtered"] = [
-                    int(tooth)
-                    for tooth in self.toothdict[patient]["gt"]
-                    if int(tooth) in self.toothlist["gt"]
-                ]
+        for patient in self.filterlist:
+            self.toothdict[patient]["gt-filtered"] = [
+                int(tooth)
+                for tooth in self.toothdict[patient]["gt"]
+                if int(tooth) in self.toothlist["gt"]
+            ]
 
-                for tooth in self.toothdict[patient]["gt-filtered"]:
-                    self.patient_tooth_list.append([patient, tooth])
+            for tooth in self.toothdict[patient]["gt-filtered"]:
+                self.patient_tooth_list.append([patient, tooth])
 
         self.num_samples = len(self.patient_tooth_list)
 
@@ -485,7 +476,6 @@ class TeethSegDataset(Dataset):
         # create paths
         all_teeth_tensor = torch.empty(0, self.num_points_orig, 3)
         # start = time.time()
-        # print(patient, self.toothdict[patient]["corr-filtered"])
 
         for tooth in self.toothdict[patient]["corr-filtered"]:
             pcd_path = op.join(
@@ -589,7 +579,6 @@ class TeethSegDataset(Dataset):
             start = 0
             for patient in tqdm(self.filterlist):
                 idx_ref = len(self.toothdict[patient]["gt-filtered"])
-
                 end = start + idx_ref
 
                 corr, gt = self.load_patient_data(patient)
@@ -607,8 +596,9 @@ class TeethSegDataset(Dataset):
         torch.save(self.shared_array_corr, self.cache_path_corr)
 
     def __getitem__(self, idx):
-        patient, tooth = self.patient_tooth_list[idx]
+        self.patient, self.tooth = self.patient_tooth_list[idx]
+
         if self.enable_cache:
             return self.shared_array_corr[idx], self.shared_array_gt[idx]
         else:
-            return self.load_patient_data(patient, corr_tooth=int(tooth))
+            return self.load_patient_data(self.patient, corr_tooth=int(self.tooth))

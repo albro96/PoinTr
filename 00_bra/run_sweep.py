@@ -42,7 +42,7 @@ if __name__ == "__main__":
     pada = import_dir_path()
 
     sweep_configuration = {
-        "description": "Only Optimizer/Scheduler",
+        "description": "AdaPoinTr vs PoinTr vs PCN (new Dataloader - filtered teeth - corr,gt = full)",
         "program": "run_training.py",
         "method": "grid",  # "random",
         "metric": {"name": "val/CDL2", "goal": "minimize"},

@@ -36,8 +36,8 @@ def main(rank=0, world_size=1):
 
     data_config = EasyDict(
         {
-            "num_points_gt": 2048,
-            "num_points_corr": 16384,  # 2048 4096 8192 16384
+            "num_points_gt": 2048, #2048,
+            "num_points_corr": 16384, #16384,  # 2048 4096 8192 16384
             "num_points_corr_type": "full",
             "num_points_gt_type": "single",
             "tooth_range": {
@@ -65,7 +65,7 @@ def main(rank=0, world_size=1):
         {
             "launcher": "pytorch" if world_size > 1 else "none",
             "local_rank": rank,
-            "num_workers": 16,  # 4,
+            "num_workers": 16,  # only applies to mode='train', set to 0 for val and test
             "seed": 0,
             "deterministic": False,
             "sync_bn": False,
@@ -118,7 +118,7 @@ def main(rank=0, world_size=1):
             },
             "max_epoch": 400,
             "consider_metric": "CDL2",
-            "total_bs": int(8 * world_size),
+            "total_bs": int(3 * world_size),
             "dense_loss_coeff": 1.0,
             "step_per_update": 1,
             "model_name": "PoinTr",

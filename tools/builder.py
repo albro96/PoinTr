@@ -22,6 +22,11 @@ def dataset_builder(args, config, mode, bs):
     shuffle = mode == 'train'
     drop_last = mode == 'train'
 
+    if mode != 'train':
+        num_workers = 0
+    else:
+        num_workers = int(args.num_workers)  
+
     if args.distributed:
         sampler = torch.utils.data.distributed.DistributedSampler(dataset, shuffle=shuffle)
     else:
@@ -30,7 +35,7 @@ def dataset_builder(args, config, mode, bs):
     dataloader = torch.utils.data.DataLoader(
         dataset, 
         batch_size = bs,
-        num_workers = int(args.num_workers),
+        num_workers = num_workers,
         drop_last = drop_last,
         worker_init_fn = worker_init_fn,
         sampler = sampler,
