@@ -1,34 +1,6 @@
-# import torch.utils.data as data
-# import numpy as np
 import os, sys
-
-# import random
-# import os
-# import json
-# from easydict import EasyDict
-# import shutil
-# import os.path as op
-# import pandas as pd
 from tqdm import tqdm
-
-# import trimesh
-import time
 from pprint import pprint
-
-sys.path.append("/storage/share/code/01_scripts/modules/")
-from os_tools.import_dir_path import import_dir_path
-
-# import pcd_tools.data_processing as dp
-from general_tools.format import format_duration
-
-# BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# sys.path.append(BASE_DIR)
-# from .build import DATASETS
-# from utils.logger import *
-# from .io import IO
-# import data_transforms
-from hashlib import sha256
-
 import copy
 import torch
 from torch.utils.data import Dataset
@@ -41,6 +13,11 @@ from easydict import EasyDict
 import pytorch3d.ops.sample_farthest_points as fps
 import ctypes
 import multiprocessing as mp
+from general_tools.format import format_duration
+from hashlib import sha256
+
+sys.path.append("/storage/share/code/01_scripts/modules/")
+from os_tools.import_dir_path import import_dir_path
 
 
 class TeethSegDataset(Dataset):

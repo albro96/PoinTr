@@ -36,13 +36,13 @@ def main(rank=0, world_size=1):
 
     data_config = EasyDict(
         {
-            "num_points_gt": 2048, #2048,
-            "num_points_corr": 16384, #16384,  # 2048 4096 8192 16384
+            "num_points_gt": 2048,  # 2048, #2048,
+            "num_points_corr": 16384,  # 16384, #16384,  # 2048 4096 8192 16384
             "num_points_corr_type": "full",
             "num_points_gt_type": "single",
             "tooth_range": {
                 "corr": "full",
-                "gt": "full",
+                "gt": "full",  # "full",
                 "jaw": "lower",
                 "quadrants": "all",
             },
@@ -64,6 +64,7 @@ def main(rank=0, world_size=1):
     args = EasyDict(
         {
             "launcher": "pytorch" if world_size > 1 else "none",
+            "num_gpus": world_size,
             "local_rank": rank,
             "num_workers": 16,  # only applies to mode='train', set to 0 for val and test
             "seed": 0,
@@ -72,7 +73,7 @@ def main(rank=0, world_size=1):
             "experiment_dir": pada.model_base_dir,
             "start_ckpts": None,
             "ckpts": None,
-            "val_freq": 10,
+            "val_freq": 20,
             "test_freq": None,
             "resume": False,
             "test": False,
@@ -82,6 +83,7 @@ def main(rank=0, world_size=1):
             "ckpt_dir": None,
             "cfg_dir": None,
             "gt_partial_saved": False,
+            "log_data": False,  # if true: wandb logger on and save ckpts to local drive
         }
     )
 
@@ -90,15 +92,15 @@ def main(rank=0, world_size=1):
             "optimizer": {
                 "type": "AdamW",
                 "kwargs": {
-                    "lr": 0.0001,  # royal-sweep-11
-                    "weight_decay": 1,  # royal-sweep-11 # 0.0001
+                    "lr": 0.0001,
+                    "weight_decay": 0.0001,  # 0.0001
                 },
             },
             "scheduler": {
                 "type": "LambdaLR",
                 "kwargs": {
-                    "decay_step": 47,  # royal-sweep-11 # 40,
-                    "lr_decay": 0.76,  # royal-sweep-11 # 0.7,
+                    "decay_step": 40,  # 40,
+                    "lr_decay": 0.7,  # 0.7,
                     "lowest_decay": 0.02,  # min lr = lowest_decay * lr
                 },
             },
@@ -106,8 +108,8 @@ def main(rank=0, world_size=1):
                 "type": "Lambda",
                 "kwargs": {
                     "decay_step": 40,
-                    "bn_decay": 0.96,  # royal-sweep-11 # 0.5,
-                    "bn_momentum": 0.55,  # royal-sweep-11 # 0.9,
+                    "bn_decay": 0.5,
+                    "bn_momentum": 0.9,
                     "lowest_decay": 0.01,
                 },
             },
@@ -116,10 +118,10 @@ def main(rank=0, world_size=1):
                 "gt_type": data_config.gt_type,
                 "cd_norm": 2,
             },
-            "max_epoch": 400,
+            "max_epoch": 500,
             "consider_metric": "CDL2",
             "total_bs": int(3 * world_size),
-            "dense_loss_coeff": 1.0,
+            "dense_loss_coeff": 0.1,  # 1.0,
             "step_per_update": 1,
             "model_name": "PoinTr",
         }
@@ -190,9 +192,9 @@ def main(rank=0, world_size=1):
         "model": {
             "NAME": "PoinTr",
             "num_pred": data_config.num_points_gt,
-            "num_query": 222,  # royal-sweep-11 #224,   # number of coarse points, dense points = 224*9 = 2016 (always true?)
-            "knn_layer": 2,  # royal-sweep-11 #1,
-            "trans_dim": 384,
+            "num_query": data_config.num_points_gt // 64,  # num_points_gt // 64,
+            "knn_layer": 1,
+            "trans_dim": 384,  # stays 384 in all configs
         },
     }
 
@@ -254,43 +256,52 @@ def main(rank=0, world_size=1):
     if args.distributed:
         assert args.local_rank == torch.distributed.get_rank()
 
-    wandb.init(
-        # set the wandb project where this run will be logged
-        project="ToothRecon",
-        config=config,
-        save_code=True,
-    )
+    if args.log_data:
+        wandb.init(
+            # set the wandb project where this run will be logged
+            project="ToothRecon",
+            config=config,
+            save_code=True,
+        )
 
-    # define custom x axis metric
-    wandb.define_metric("train/epoch")
-    wandb.define_metric("val/epoch")
-    wandb.define_metric("test/epoch")
+        # define custom x axis metric
+        wandb.define_metric("epoch")
 
-    # set all other train/ metrics to use this step
-    wandb.define_metric("train/*", step_metric="train/epoch")
-    wandb.define_metric("val/*", step_metric="val/epoch")
-    wandb.define_metric("test/*", step_metric="test/epoch")
+        # set all other train/ metrics to use this step
+        wandb.define_metric("train/*", step_metric="epoch")
+        wandb.define_metric("val/*", step_metric="epoch")
+        wandb.define_metric("test/*", step_metric="epoch")
 
-    # If called by wandb.agent, as below,
-    # this config will be set by Sweep Controller
-    wandb_config = wandb.config
+        wandb.define_metric("val/pcd/dense/*", step_metric="epoch")
+        wandb.define_metric("val/pcd/coarse/*", step_metric="epoch")
+        wandb.define_metric("val/pcd/full-dense/*", step_metric="epoch")
+        wandb.define_metric("val/pcd/gt/*", step_metric="epoch")
+        wandb.define_metric("val/pcd/partial/*", step_metric="epoch")
 
-    # update the model config with wandb config
-    for key, value in wandb_config.items():
-        if "." in key:
-            keys = key.split(".")
-            config_temp = config
-            for sub_key in keys[:-1]:
-                config_temp = config_temp.setdefault(sub_key, {})
-            config_temp[keys[-1]] = value
-        else:
-            config[key] = value
+        # If called by wandb.agent, as below,
+        # this config will be set by Sweep Controller
+        wandb_config = wandb.config
+
+        # update the model config with wandb config
+        for key, value in wandb_config.items():
+            if "." in key:
+                keys = key.split(".")
+                config_temp = config
+                for sub_key in keys[:-1]:
+                    config_temp = config_temp.setdefault(sub_key, {})
+                config_temp[keys[-1]] = value
+            else:
+                config[key] = value
 
     config.model.update(network_config_dict[config.model_name].model)
+
     if config.model.NAME == "AdaPoinTr":
         config.model.dense_loss_coeff = config.dense_loss_coeff
 
-    args.sweep = True if "sweep" in wandb_config else False
+    if args.log_data:
+        args.sweep = True if "sweep" in wandb_config else False
+    else:
+        args.sweep = False
 
     args.experiment_path = os.path.join(args.experiment_dir, config.model_name)
 
@@ -299,24 +310,24 @@ def main(rank=0, world_size=1):
             args.experiment_path, "sweep", wandb.run.sweep_id
         )
 
-    if not os.path.exists(args.experiment_path):
-        os.makedirs(args.experiment_path, exist_ok=True)
-        print("Create experiment path successfully at %s" % args.experiment_path)
+    if args.log_data:
+        if not os.path.exists(args.experiment_path):
+            os.makedirs(args.experiment_path, exist_ok=True)
+            print("Create experiment path successfully at %s" % args.experiment_path)
 
-    shutil.copy(__file__, args.experiment_path)
+        shutil.copy(__file__, args.experiment_path)
 
-    # set the wandb run dir
-    # wandb.run.dir = args.experiment_path
+        # set the wandb run dir
+        # wandb.run.dir = args.experiment_path
 
-    args.cfg_dir = op.join(args.experiment_path, "config")
-    args.ckpt_dir = op.join(args.experiment_path, "ckpt")
-    os.makedirs(args.cfg_dir, exist_ok=True)
-    os.makedirs(args.ckpt_dir, exist_ok=True)
+        args.cfg_dir = op.join(args.experiment_path, "config")
+        args.ckpt_dir = op.join(args.experiment_path, "ckpt")
+        os.makedirs(args.cfg_dir, exist_ok=True)
+        os.makedirs(args.ckpt_dir, exist_ok=True)
+        cfg_name = f"config-{wandb.run.name}.json"
 
-    cfg_name = f"config-{wandb.run.name}.json"
-
-    with open(os.path.join(args.cfg_dir, cfg_name), "w") as json_file:
-        json_file.write(json.dumps(config, indent=4))
+        with open(os.path.join(args.cfg_dir, cfg_name), "w") as json_file:
+            json_file.write(json.dumps(config, indent=4))
 
     # batch size
     if args.distributed:
@@ -325,8 +336,9 @@ def main(rank=0, world_size=1):
     else:
         config.bs = config.total_bs
 
-    # update wandb config
-    wandb.config.update(config, allow_val_change=True)
+    if args.log_data:
+        # update wandb config
+        wandb.config.update(config, allow_val_change=True)
 
     # pprint(wandb.config)
     pprint(config)
@@ -348,10 +360,18 @@ def main(rank=0, world_size=1):
 if __name__ == "__main__":
 
     # User Input
-    num_gpus = 1  # number of gpus
+    num_gpus = 1  # number of gpus, dont use 3
     print("Number of GPUs: ", num_gpus)
 
     if num_gpus > 1:
+
+        if num_gpus == 2:
+            os.environ["CUDA_VISIBLE_DEVICES"] = "2,3"
+        elif num_gpus == 3:
+            os.environ["CUDA_VISIBLE_DEVICES"] = "1,2,3"
+        elif num_gpus == 4:
+            os.environ["CUDA_VISIBLE_DEVICES"] = "0,1,2,3"
+
         os.environ["MASTER_ADDR"] = "localhost"
         os.environ["MASTER_PORT"] = "12345"  # Set any free port
         os.environ["WORLD_SIZE"] = str(num_gpus)
@@ -359,4 +379,5 @@ if __name__ == "__main__":
         mp.spawn(main, args=(num_gpus,), nprocs=num_gpus, join=True)
     else:
         os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+        os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
         main(rank=0, world_size=1)

@@ -34,7 +34,7 @@ if __name__ == "__main__":
     device = torch.device("cuda:0")
 
     tooth_ranges = [
-        {"corr": "full", "gt": 'full', "jaw": "lower", "quadrants": [3, 4]},
+        {"corr": "full", "gt": '5-7', "jaw": "lower", "quadrants": [3, 4]},
     ]
 
     num_pts = [
@@ -57,7 +57,7 @@ if __name__ == "__main__":
                 gt_type="single",  #'full',
                 device=device,
                 use_fixed_split=True,
-                enable_cache=True,
+                enable_cache=False,
                 create_cache_file=True,
             )
 
@@ -69,10 +69,10 @@ if __name__ == "__main__":
                 num_workers=0,
             )
 
-            for idx, data in enumerate(val_loader):
-                print(data[0].shape, data[1].shape)
+            # for idx, data in enumerate(val_loader):
+            #     print(data[0].shape, data[1].shape)
                 
-                print(val_loader.dataset.patient, val_loader.dataset.tooth)
+            #     print(val_loader.dataset.patient, val_loader.dataset.tooth)
 
                 
                 # pcd_corr = o3d.geometry.PointCloud()

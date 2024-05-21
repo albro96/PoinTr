@@ -48,9 +48,10 @@ def run_net(args, config):
             print('Using Synchronized BatchNorm ...')
         base_model = nn.parallel.DistributedDataParallel(base_model, device_ids=[args.local_rank % torch.cuda.device_count()], find_unused_parameters=True)
         print('Using Distributed Data parallel ...' )
-    else:
+    else: #elif args.num_gpus > 1:
         print('Using Data parallel ...' )
         base_model = nn.DataParallel(base_model).to(args.device)
+
 
     # optimizer & scheduler
     optimizer = builder.build_optimizer(base_model, config)
@@ -60,7 +61,8 @@ def run_net(args, config):
         builder.resume_optimizer(optimizer, args)
     scheduler = builder.build_scheduler(base_model, optimizer, config, last_epoch=start_epoch-1)
 
-    wandb.watch(base_model)
+    if args.log_data:
+        wandb.watch(base_model)
 
     # trainval
     # training
@@ -87,7 +89,7 @@ def run_net(args, config):
         n_batches = len(train_dataloader)
 
         for idx, data in enumerate(train_dataloader):            
-
+            # print(train_dataloader.dataset.patient, train_dataloader.dataset.tooth)
             data_time.update(time.time() - batch_start_time)
             # npoints = config.dataset.train._base_.N_POINTS
             # dataset_name = config.dataset.train._base_.NAME
@@ -101,9 +103,15 @@ def run_net(args, config):
                 ret = base_model(partial)
                 sparse_loss, dense_loss = base_model.module.get_loss(ret, gt, epoch)    
             
-            # denseloss coeff is applied in model for adapointr
+
+            # print("torch.cuda.memory_allocated: %fGB"%(torch.cuda.memory_allocated()/1024/1024/1024))
+            # print("torch.cuda.memory_cached: %fGB"%(torch.cuda.memory_cached()/1024/1024/1024))
+            # print("torch.cuda.memory_reserved: %fGB"%(torch.cuda.memory_reserved()/1024/1024/1024))
+            # time.sleep(1)
+            
+           
             if config.model.NAME == 'AdaPoinTr':
-                _loss = sparse_loss + dense_loss
+                _loss = sparse_loss + dense_loss  # denseloss coeff is applied in model for adapointr
             else:
                 _loss = sparse_loss + config.dense_loss_coeff*dense_loss 
             
@@ -135,12 +143,12 @@ def run_net(args, config):
             if not args.sweep:
                 print(f'\r[Epoch {epoch}/{config.max_epoch}][Batch {idx}/{n_batches}] BatchTime = {format_duration(batch_time.val(-1))} Losses = {[f"{l:.4f}"  for l in losses.val()]} lr = {optimizer.param_groups[0]["lr"]:.6f}', end="\r")
 
-        if args.sweep:
+        if args.sweep and args.log_data:
             print(f'\rAgent: {wandb.run.id} Epoch [{epoch}/{config.max_epoch}] Losses = {[f"{l:.4f}"  for l in losses.val()]} lr = {optimizer.param_groups[0]["lr"]:.6f}')
 
-            if config.scheduler.type == 'GradualWarmup':
-                if n_itr < config.scheduler.kwargs_2.total_epoch:
-                    scheduler.step()
+        if config.scheduler.type == 'GradualWarmup':
+            if n_itr < config.scheduler.kwargs_2.total_epoch:
+                scheduler.step()
 
         if isinstance(scheduler, list):
             for item in scheduler:
@@ -149,21 +157,21 @@ def run_net(args, config):
             scheduler.step()
         epoch_end_time = time.time()
         
-        if epoch % args.val_freq == 0:
+        if epoch % args.val_freq == 0 and epoch != 0:
             # Validate the current model
             metrics = validate(base_model, val_dataloader, epoch, args, config)
 
             # Save ckeckpoints
             if metrics.better_than(best_metrics):
                 best_metrics = metrics
-                if args.save_checkpoints:
+                if args.save_checkpoints and args.log_data:
                     builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, f'ckpt-best-{wandb.run.name}', args)
 
         if args.test_freq is not None and epoch % args.test_freq == 0:
             metrics = test(base_model, test_dataloader, args, config, epoch=epoch)
 
             
-        if args.save_checkpoints and not args.save_only_best:
+        if args.save_checkpoints and not args.save_only_best and args.log_data:
             builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, 'ckpt-last', args)  
             # save every 100 epoch
             if epoch % 100 == 0 and epoch != 0:
@@ -172,6 +180,14 @@ def run_net(args, config):
             if (config.max_epoch - epoch) < 2:
                 builder.save_checkpoint(base_model, optimizer, epoch, metrics, best_metrics, f'ckpt-epoch-{epoch:03d}-{wandb.run.name}', args)   
 
+        if args.log_data:
+            wandb.log(
+                {
+                    "epoch": epoch,
+                    "train/sparse_loss": losses.avg()[0],
+                    "train/dense_loss": losses.avg()[1], 
+                }, step=epoch)
+            
         epoch_allincl_end_time = time.time()
 
         epoch_time_list.append(epoch_allincl_end_time - epoch_allincl_start_time)
@@ -182,12 +198,7 @@ def run_net(args, config):
         
         print(f'[Training] EPOCH: {epoch}/{config.max_epoch} EpochTime = {format_duration(epoch_time_list[-1])} Remaining Time = {format_duration(est_time)} Losses = {["%.4f" % l for l in losses.avg()]} \n' )
 
-        wandb.log(
-            {
-                "train/epoch": epoch,
-                "train/sparse_loss": losses.avg()[0],
-                "train/dense_loss": losses.avg()[1], 
-            })
+
         
 
 def validate(base_model, val_dataloader, epoch, args, config, logger = None):
@@ -209,13 +220,13 @@ def validate(base_model, val_dataloader, epoch, args, config, logger = None):
             coarse_points = ret[0]
             dense_points = ret[-1]
 
-            if val_dataloader.dataset.patient == '0U1LI1CB':
+            if val_dataloader.dataset.patient == '0U1LI1CB' and args.log_data:
                 full_dense = torch.cat([partial, dense_points], dim=1)
-                wandb.log({f"val/dense/{val_dataloader.dataset.tooth}": wandb.Object3D({"type": "lidar/beta","points": dense_points[0].detach().cpu().numpy(),})})
-                wandb.log({f"val/coarse/{val_dataloader.dataset.tooth}": wandb.Object3D({"type": "lidar/beta","points": coarse_points[0].detach().cpu().numpy(),})})
-                wandb.log({f"val/full-dense/{val_dataloader.dataset.tooth}": wandb.Object3D({"type": "lidar/beta","points": full_dense[0].detach().cpu().numpy(),})})
-                wandb.log({f"val/gt/{val_dataloader.dataset.tooth}": wandb.Object3D({"type": "lidar/beta","points": gt[0].detach().cpu().numpy(),})})
-                wandb.log({f"val/partial/{val_dataloader.dataset.tooth}": wandb.Object3D({"type": "lidar/beta","points": partial[0].detach().cpu().numpy(),})})
+                wandb.log({f"val/pcd/dense/{val_dataloader.dataset.tooth}": wandb.Object3D({"type": "lidar/beta","points": dense_points[0].detach().cpu().numpy(),})}, step=epoch)
+                wandb.log({f"val/pcd/coarse/{val_dataloader.dataset.tooth}": wandb.Object3D({"type": "lidar/beta","points": coarse_points[0].detach().cpu().numpy(),})}, step=epoch)
+                wandb.log({f"val/pcd/full-dense/{val_dataloader.dataset.tooth}": wandb.Object3D({"type": "lidar/beta","points": full_dense[0].detach().cpu().numpy(),})}, step=epoch)
+                wandb.log({f"val/pcd/gt/{val_dataloader.dataset.tooth}": wandb.Object3D({"type": "lidar/beta","points": gt[0].detach().cpu().numpy(),})}, step=epoch)
+                wandb.log({f"val/pcd/partial/{val_dataloader.dataset.tooth}": wandb.Object3D({"type": "lidar/beta","points": partial[0].detach().cpu().numpy(),})}, step=epoch)
                 
             sparse_loss_l1 =  chamfer_distance(coarse_points, gt, norm=1)[0]
             sparse_loss_l2 =  chamfer_distance(coarse_points, gt, norm=2)[0]
@@ -246,12 +257,13 @@ def validate(base_model, val_dataloader, epoch, args, config, logger = None):
     
     print('============================ VAL RESULTS ============================')
     print(f'Epoch: {epoch}')
-    log_dict = {'val/epoch': epoch}
+    log_dict = {}#{'val/epoch': epoch}
     for metric, value in zip(val_metrics.items, val_metrics.avg()):
         log_dict[f"val/{metric}"] = value
         print(f'{metric}: {value:.6f}')
 
-    wandb.log(log_dict)
+    if args.log_data:
+        wandb.log(log_dict, step=epoch)
 
     return Metrics(config.consider_metric, val_metrics.avg())
 
@@ -310,10 +322,11 @@ def test(base_model, test_dataloader, args, config, logger = None, epoch=None):
             test_metrics.update(_metrics)
 
     print('============================ TEST RESULTS ============================')
-    log_dict = {'test/epoch': epoch}
+    log_dict = {}#{'test/epoch': epoch}
     for metric, value in zip(test_metrics.items, test_metrics.avg()):
         log_dict[f"test/{metric}"] = value
         print(f'{metric}: {value:.6f}')
-    wandb.log(log_dict)
+    if args.log_data:
+        wandb.log(log_dict, step=epoch)
 
     return 
