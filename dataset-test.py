@@ -17,15 +17,13 @@ from os_tools.import_dir_path import import_dir_path, convert_path
 pada = import_dir_path()
 
 sys.path.append(pada.models.pointr.repo_dir)
-from tools import builder
-from tools.inference import inference_single
 from datasets.TeethSegDataset import TeethSegDataset
 
 import open3d as o3d
 
 # from pcd_tools.visualizer import ObjectVisualizer
 
-save_dir = convert_path(r"O:\nobackup\data\3DTeethSeg22\testdata")
+save_dir = convert_path(r"O:\nobackup\data\3DTeethSeg22\testdata-full-gt")
 
 os.makedirs(save_dir, exist_ok=True)
 
@@ -34,7 +32,7 @@ if __name__ == "__main__":
     device = torch.device("cuda:0")
 
     tooth_ranges = [
-        {"corr": "full", "gt": '5-7', "jaw": "lower", "quadrants": [3, 4]},
+        {"corr": "full", "gt": "5-7", "jaw": "lower", "quadrants": [3, 4]},
     ]
 
     num_pts = [
@@ -47,17 +45,32 @@ if __name__ == "__main__":
             # toothrange = copy.deepcopy(tooth_range)
             # num_pt = copy.deepcopy(num_pt)
             # print(f'Loading dataset with tooth_range: {tooth_range} and num_points: {num_pt}')
+            # train_set = TeethSegDataset(
+            #     mode="val",
+            #     tooth_range=tooth_range,
+            #     num_points_corr=num_pt["corr"],
+            #     num_points_gt=num_pt["gt"],
+            #     num_points_gt_type="single",
+            #     num_points_corr_type="full",
+            #     gt_type="single",  #'full',
+            #     device=device,
+            #     use_fixed_split=True,
+            #     enable_cache=False,
+            #     create_cache_file=True,
+            # )
+
             train_set = TeethSegDataset(
-                mode="train",
+                mode="val",
                 tooth_range=tooth_range,
-                num_points_corr=num_pt["corr"],
-                num_points_gt=num_pt["gt"],
-                num_points_gt_type="single",
+                num_points_corr=2,
+                num_points_gt=8192,
+                return_only_full_gt=True,
+                num_points_gt_type="full",
                 num_points_corr_type="full",
-                gt_type="single",  #'full',
+                gt_type="full",  #'full',
                 device=device,
                 use_fixed_split=True,
-                enable_cache=False,
+                enable_cache=True,
                 create_cache_file=True,
             )
 
@@ -70,22 +83,28 @@ if __name__ == "__main__":
             )
 
             # for idx, data in enumerate(val_loader):
+            #     print(data.shape)
+            #     # # save pcds
+            #     pcd_gt = o3d.geometry.PointCloud()
+            #     pcd_gt.points = o3d.utility.Vector3dVector(data[0].cpu().numpy())
+            #     o3d.io.write_point_cloud(op.join(save_dir, f"{idx:04d}_gt.pcd"), pcd_gt)
+
+            # for idx, data in enumerate(val_loader):
             #     print(data[0].shape, data[1].shape)
-                
+
             #     print(val_loader.dataset.patient, val_loader.dataset.tooth)
 
-                
-                # pcd_corr = o3d.geometry.PointCloud()
-                # pcd_corr.points = o3d.utility.Vector3dVector(data[0].cpu().numpy())
-                # pcd_gt = o3d.geometry.PointCloud()
-                # pcd_gt.points = o3d.utility.Vector3dVector(data[1].cpu().numpy())
+            # pcd_corr = o3d.geometry.PointCloud()
+            # pcd_corr.points = o3d.utility.Vector3dVector(data[0].cpu().numpy())
+            # pcd_gt = o3d.geometry.PointCloud()
+            # pcd_gt.points = o3d.utility.Vector3dVector(data[1].cpu().numpy())
 
-                # # save pcds
-                # o3d.io.write_point_cloud(
-                #     op.join(save_dir, f"{idx:04d}_corr.pcd"), pcd_corr
-                # )
+            # # save pcds
+            # o3d.io.write_point_cloud(
+            #     op.join(save_dir, f"{idx:04d}_corr.pcd"), pcd_corr
+            # )
 
-                # o3d.io.write_point_cloud(op.join(save_dir, f"{idx:04d}_gt.pcd"), pcd_gt)
+            # o3d.io.write_point_cloud(op.join(save_dir, f"{idx:04d}_gt.pcd"), pcd_gt)
 
             # full = data[0].cpu().numpy()
 

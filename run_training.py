@@ -258,9 +258,8 @@ def main(rank=0, world_size=1):
 
     if args.log_data:
         wandb.init(
-            # set the wandb project where this run will be logged
+            # set the wandb project where this run will be logged, dont set config here, else sweep will fail
             project="ToothRecon",
-            config=config,
             save_code=True,
         )
 
