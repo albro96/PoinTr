@@ -36,17 +36,17 @@ def main(rank=0, world_size=1):
 
     data_config = EasyDict(
         {
-            "num_points_gt": 2048,  # 2048, #2048,
+            "num_points_gt": 16384,  # 2048,  # 2048, #2048,
             "num_points_corr": 16384,  # 16384, #16384,  # 2048 4096 8192 16384
             "num_points_corr_type": "full",
-            "num_points_gt_type": "single",
+            "num_points_gt_type": "full",
             "tooth_range": {
-                "corr": "full",
+                "corr": "full",  # "full",
                 "gt": "full",  # "full",
                 "jaw": "lower",
                 "quadrants": "all",
             },
-            "gt_type": "single",
+            "gt_type": "full",
             "data_type": "npy",
             "samplingmethod": "fps",
             "downsample_steps": 2,
@@ -93,13 +93,13 @@ def main(rank=0, world_size=1):
                 "type": "AdamW",
                 "kwargs": {
                     "lr": 0.0001,
-                    "weight_decay": 0.0001,  # 0.0001
+                    "weight_decay": 0.001,  # 0.0001
                 },
             },
             "scheduler": {
                 "type": "LambdaLR",
                 "kwargs": {
-                    "decay_step": 40,  # 40,
+                    "decay_step": 50,  # 40,
                     "lr_decay": 0.7,  # 0.7,
                     "lowest_decay": 0.02,  # min lr = lowest_decay * lr
                 },
@@ -116,14 +116,15 @@ def main(rank=0, world_size=1):
             "dataset": data_config,
             "model": {
                 "gt_type": data_config.gt_type,
-                "cd_norm": 2,
+                "cd_norm": 1,
             },
             "max_epoch": 500,
             "consider_metric": "CDL2",
-            "total_bs": int(3 * world_size),
+            "total_bs": int(30 * world_size),
             "dense_loss_coeff": 0.1,  # 1.0,
             "step_per_update": 1,
-            "model_name": "PoinTr",
+            "grad_norm_clip": 5,
+            "model_name": "CRAPCN",  # "PoinTr",
         }
     )
 
@@ -203,6 +204,13 @@ def main(rank=0, world_size=1):
             "NAME": "PCN",
             "num_pred": data_config.num_points_gt,
             "encoder_channel": 1024,
+        },
+    }
+
+    network_config_dict.CRAPCN = {
+        "model": {
+            "NAME": "CRAPCN",
+            "loss_subsample": True,  # calc both direction CD (True )for the sparse PCDs Pc P1 P2 or single direction (False)
         },
     }
 
@@ -341,6 +349,8 @@ def main(rank=0, world_size=1):
 
     # pprint(wandb.config)
     pprint(config)
+
+    torch.autograd.set_detect_anomaly(True)
 
     # run
     if args.test:
