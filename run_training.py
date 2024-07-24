@@ -36,28 +36,28 @@ def main(rank=0, world_size=1):
 
     data_config = EasyDict(
         {
-            "num_points_gt": 16384,  # 2048,  # 2048, #2048,
-            "num_points_corr": 16384,  # 16384, #16384,  # 2048 4096 8192 16384
+            "num_points_gt": 2048,  # 2048
+            "num_points_corr": 16384,  # 16384
+            "num_points_corr_anta": 8192,  # 8192,
             "num_points_corr_type": "full",
             "num_points_gt_type": "full",
             "tooth_range": {
-                "corr": "full",  # "full",
-                "gt": "full",  # "full",
-                "jaw": "lower",
+                "corr": "full",
+                "gt": "full",  # "full",  # "full",
+                "jaw": "full",
                 "quadrants": "all",
             },
-            "gt_type": "full",
+            "return_only_full_gt": False,
+            "gt_type": "single",
             "data_type": "npy",
             "samplingmethod": "fps",
             "downsample_steps": 2,
             "use_fixed_split": True,
-            # "splits": {'train': 0.8,'val': 0.1, 'test': 0.1},
             "enable_cache": True,
             "create_cache_file": True,
             "overwrite_cache_file": False,
-            "cache_dir": op.join(
-                pada.base_dir, "nobackup", "data", "3DTeethSeg22", "cache"
-            ),
+            "return_antagonist": True,
+            "return_normals": True,
         }
     )
 
@@ -73,7 +73,7 @@ def main(rank=0, world_size=1):
             "experiment_dir": pada.model_base_dir,
             "start_ckpts": None,
             "ckpts": None,
-            "val_freq": 20,
+            "val_freq": 1,
             "test_freq": None,
             "resume": False,
             "test": False,
@@ -116,15 +116,22 @@ def main(rank=0, world_size=1):
             "dataset": data_config,
             "model": {
                 "gt_type": data_config.gt_type,
-                "cd_norm": 1,
+                "cd_norm": 2,
             },
             "max_epoch": 500,
             "consider_metric": "CDL2",
-            "total_bs": int(30 * world_size),
+            "loss_metrics": ["SparseLoss", "DenseLoss", "OcclusionLoss", "ClusterLoss"],
+            "val_metrics": [
+                "CDL1",
+                "CDL2",
+                "F-Score",
+                # "OcclusionLoss",
+            ],
+            "total_bs": int(7 * world_size),  # CRAPCN: int(30*world_size),
             "dense_loss_coeff": 0.1,  # 1.0,
             "step_per_update": 1,
             "grad_norm_clip": 5,
-            "model_name": "CRAPCN",  # "PoinTr",
+            "model_name": "PoinTr",  # "PoinTr", 'CRAPCN'
         }
     )
 
@@ -358,10 +365,6 @@ def main(rank=0, world_size=1):
     else:
         run_net(args, config)
 
-
-# argparse = argparse.ArgumentParser()
-# argparse.add_argument('--sweep', type=bool, default=False, help='Sweep mode')
-# argparse_args = argparse.parse_args()
 
 # ---------------------------------------- #
 # ----------------- RUN ------------------ #

@@ -131,6 +131,7 @@ class PoinTr(nn.Module):
         )[0]
 
         loss_fine = chamfer_distance(ret[1], gt, norm=cd_norm)[0]
+
         return loss_coarse, loss_fine
 
     def forward(self, xyz):

@@ -12,29 +12,56 @@ from extensions.chamfer_dist import ChamferDistanceL1, ChamferDistanceL2
 import os
 from extensions.emd import emd_module as emd
 from pytorch3d.loss import chamfer_distance
+import sys
+from easydict import EasyDict
+
+sys.path.append("/storage/share/code/01_scripts/modules/")
+
+import ml_tools.metrics as ml_metrics
+
 
 class Metrics(object):
-    ITEMS = [{
-        'name': 'F-Score',
-        'enabled': True,
-        'eval_func': 'cls._get_f_score',
-        'is_greater_better': True,
-        'init_value': 0
-    }, {
-        'name': 'CDL1',
-        'enabled': True,
-        'eval_func': 'cls._get_chamfer_distancel1',
-        'eval_object': None,
-        'is_greater_better': False,
-        'init_value': 32767
-    }, {
-        'name': 'CDL2',
-        'enabled': True,
-        'eval_func': 'cls._get_chamfer_distancel2',
-        'eval_object': None,
-        'is_greater_better': False,
-        'init_value': 32767
-    }]
+    ITEMS = [
+        {
+            "name": "F-Score",
+            "enabled": True,
+            "eval_func": "cls._get_f_score",
+            "is_greater_better": True,
+            "init_value": 0,
+        },
+        {
+            "name": "CDL1",
+            "enabled": True,
+            "eval_func": "cls._get_chamfer_distancel1",
+            "eval_object": None,
+            "is_greater_better": False,
+            "init_value": 32767,
+        },
+        {
+            "name": "CDL2",
+            "enabled": True,
+            "eval_func": "cls._get_chamfer_distancel2",
+            "eval_object": None,
+            "is_greater_better": False,
+            "init_value": 32767,
+        },
+        {
+            "name": "OcclusionLoss",
+            "enabled": True,
+            "eval_func": "cls._get_occlusion_loss",
+            "eval_object": None,
+            "is_greater_better": False,
+            "init_value": 32767,
+        },
+        {
+            "name": "ClusterLoss",
+            "enabled": True,
+            "eval_func": "cls._get_cluster_loss",
+            "eval_object": None,
+            "is_greater_better": False,
+            "init_value": 32767,
+        },
+    ]
     # , {
     #     'name': 'EMDistance',
     #     'enabled': True,
@@ -56,33 +83,53 @@ class Metrics(object):
     #             _values[i] = eval_func(pred, gt)
 
     #     return _values
-    
+
     @classmethod
-    def get(cls, pred, gt, partial):
-        _items = cls.items()
-        _values = [0] * len(_items)
+    def get(cls, pred, gt, partial=None, antagonist=None, val_metrics=None):
+        _items = [item for item in cls.items() if item["name"] in val_metrics]
+
+        _values = EasyDict()
+
         for i, item in enumerate(_items):
-            eval_func = eval(item['eval_func'])
-            if 'f_score' in item['eval_func']:
+            eval_func = eval(item["eval_func"])
+            if "f_score" in item["eval_func"]:
                 full_pred = torch.concatenate([pred, partial], dim=1)
                 full_gt = torch.concatenate([gt, partial], dim=1)
-                _values[i] = eval_func(full_pred, full_gt)
+                _values[item["name"]] = eval_func(full_pred, full_gt)
+            elif any(
+                term in item["eval_func"]
+                for term in ["occlusion_loss", "cluster_distance_loss", "cluster_loss"]
+            ):
+                assert antagonist is not None
+                _values[item["name"]] = eval_func(pred, gt, antagonist)
             else:
-                _values[i] = eval_func(pred, gt)
+                _values[item["name"]] = eval_func(pred, gt)
+
         return _values
-    
+
     @classmethod
     def items(cls):
-        return [i for i in cls.ITEMS if i['enabled']]
+        return [i for i in cls.ITEMS if i["enabled"]]
 
     @classmethod
     def names(cls):
         _items = cls.items()
-        return [i['name'] for i in _items]
+        return [i["name"] for i in _items]
+
+    @classmethod
+    def _get_cluster_distance_loss(cls, pred, gt, antagonist):
+        pass
+
+    @classmethod
+    def _get_cluster_loss(cls, pred, gt, antagonist):
+        return ml_metrics.get_cluster_loss(recon=pred, gt=gt, antagonist=antagonist)
+
+    @classmethod
+    def _get_occlusion_loss(cls, pred, gt, antagonist):
+        return ml_metrics.get_occlusion_loss(recon=pred, gt=gt, antagonist=antagonist)
 
     @classmethod
     def _get_f_score(cls, pred, gt, th=0.01):
-
         """References: https://github.com/lmb-freiburg/what3d/blob/master/util.py"""
         b = pred.size(0)
         device = pred.device
@@ -90,8 +137,10 @@ class Metrics(object):
         if b != 1:
             f_score_list = []
             for idx in range(b):
-                f_score_list.append(cls._get_f_score(pred[idx:idx+1], gt[idx:idx+1]))
-            return sum(f_score_list)/len(f_score_list)
+                f_score_list.append(
+                    cls._get_f_score(pred[idx : idx + 1], gt[idx : idx + 1])
+                )
+            return sum(f_score_list) / len(f_score_list)
         else:
             pred = cls._get_open3d_ptcloud(pred)
             gt = cls._get_open3d_ptcloud(gt)
@@ -101,7 +150,11 @@ class Metrics(object):
 
             recall = float(sum(d < th for d in dist2)) / float(len(dist2))
             precision = float(sum(d < th for d in dist1)) / float(len(dist1))
-            result = 2 * recall * precision / (recall + precision) if recall + precision else 0.
+            result = (
+                2 * recall * precision / (recall + precision)
+                if recall + precision
+                else 0.0
+            )
             result_tensor = torch.tensor(result).to(device)
             return result_tensor
 
@@ -126,35 +179,35 @@ class Metrics(object):
 
     @classmethod
     def _get_emd_distance(cls, pred, gt, eps=0.005, iterations=100):
-        emd_loss = cls.ITEMS[3]['eval_object']
+        emd_loss = cls.ITEMS[3]["eval_object"]
         dist, _ = emd_loss(pred, gt, eps, iterations)
         emd_out = torch.mean(torch.sqrt(dist))
         return emd_out * 1
 
     def __init__(self, metric_name, values):
         self._items = Metrics.items()
-        self._values = [item['init_value'] for item in self._items]
+        self._values = [item["init_value"] for item in self._items]
         self.metric_name = metric_name
 
-        if type(values).__name__ == 'list':
+        if type(values).__name__ == "list":
             self._values = values
-        elif type(values).__name__ == 'dict':
+        elif type(values).__name__ == "dict":
             metric_indexes = {}
             for idx, item in enumerate(self._items):
-                item_name = item['name']
+                item_name = item["name"]
                 metric_indexes[item_name] = idx
             for k, v in values.items():
                 if k not in metric_indexes:
-                    logging.warn('Ignore Metric[Name=%s] due to disability.' % k)
+                    logging.warn("Ignore Metric[Name=%s] due to disability." % k)
                     continue
                 self._values[metric_indexes[k]] = v
         else:
-            raise Exception('Unsupported value type: %s' % type(values))
+            raise Exception("Unsupported value type: %s" % type(values))
 
     def state_dict(self):
         _dict = dict()
         for i in range(len(self._items)):
-            item = self._items[i]['name']
+            item = self._items[i]["name"]
             value = self._values[i]
             _dict[item] = value
 
@@ -169,13 +222,17 @@ class Metrics(object):
 
         _index = -1
         for i, _item in enumerate(self._items):
-            if _item['name'] == self.metric_name:
+            if _item["name"] == self.metric_name:
                 _index = i
                 break
         if _index == -1:
-            raise Exception('Invalid metric name to compare.')
+            raise Exception("Invalid metric name to compare.")
 
         _metric = self._items[i]
         _value = self._values[_index]
         other_value = other._values[_index]
-        return _value > other_value if _metric['is_greater_better'] else _value < other_value
+        return (
+            _value > other_value
+            if _metric["is_greater_better"]
+            else _value < other_value
+        )

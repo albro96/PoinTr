@@ -18,12 +18,13 @@ sys.path.append("/storage/share/code/01_scripts/modules/")
 
 
 def dataset_builder(args, config, mode, bs):
+    # if config.return_antagonist or config.tooth_range.jaw == "full":
+    #     from datasets.TeethSegDataset import TeethSegDataset_Normals as TeethSegDataset
+    # else:
     from datasets.TeethSegDataset import TeethSegDataset
 
     # dataset = build_dataset_from_cfg(config)
     dataset = TeethSegDataset(**config, mode=mode, device=args.device)
-
-    print(dataset)
 
     shuffle = mode == "train"
     drop_last = mode == "train"

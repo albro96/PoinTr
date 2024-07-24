@@ -17,6 +17,87 @@ from pytorch3d.loss import chamfer_distance
 sys.path.append("/storage/share/code/01_scripts/modules/")
 from general_tools.format import format_duration
 
+# from ml_tools.metrics import get_occlusion_loss
+
+
+def build_loss(base_model, partial, gt, config, antagonist=None):
+    losses = EasyDict()
+    # create keys from losses_list
+    for key in config.loss_metrics:
+        losses[key] = None
+
+    _loss = 0
+    # check if partial has nan
+    ret = base_model(partial)
+    recon = ret[-1]
+
+    if config.model.NAME in ["AdaPoinTr", "PoinTr", "PCN"]:
+        sparse_loss, dense_loss = base_model.module.get_loss(ret=ret, gt=gt)
+    elif config.model.NAME == "CRAPCN":
+        cd_loss, cra_losses = base_model.module.get_loss(
+            ret=ret, gt=gt, partial=partial, config=config
+        )
+        sparse_loss = cra_losses[0]
+        dense_loss = cra_losses[-1]
+
+    if "SparseLoss" in config.loss_metrics:
+        if config.model.NAME in ["AdaPoinTr", "PoinTr", "PCN"]:
+            _loss += sparse_loss
+            losses.SparseLoss = sparse_loss
+
+        elif config.model.NAME == "CRAPCN":
+            if all(
+                [loss in config.loss_metrics for loss in ["SparseLoss", "DenseLoss"]]
+            ):
+                _loss += cd_loss
+                losses.SparseLoss = cd_loss
+                losses.DenseLoss = cd_loss
+            else:
+                _loss += sparse_loss
+                losses.SparseLoss = sparse_loss
+
+    if "DenseLoss" in config.loss_metrics:
+        if config.model.NAME == "AdaPoinTr":
+            _loss += dense_loss
+            losses.DenseLoss = dense_loss
+
+        elif config.model.NAME in ["PoinTr", "PCN"]:
+            _loss += config.dense_loss_coeff * dense_loss
+            losses.DenseLoss = dense_loss
+
+        elif config.model.NAME == "CRAPCN":
+            if all(
+                [loss in config.loss_metrics for loss in ["SparseLoss", "DenseLoss"]]
+            ):
+                pass
+            else:
+                _loss += dense_loss
+                losses.DenseLoss = dense_loss
+
+    loss_metrics_filtered = [
+        metric for metric in config.loss_metrics if metric in Metrics.names()
+    ]
+
+    if any([term in config.loss_metrics for term in ["OcclusionLoss", "ClusterLoss"]]):
+        assert (
+            antagonist is not None
+        ), "Antagonist is required for OcclusionLoss or ClusterLoss"
+
+    if loss_metrics_filtered:
+        metrics = Metrics.get(
+            pred=recon,
+            gt=gt,
+            partial=None,
+            antagonist=antagonist,
+            val_metrics=loss_metrics_filtered,
+        )
+
+        for metric in loss_metrics_filtered:
+            losses[metric] = metrics[metric]
+            _loss += metrics[metric]
+
+    return _loss, losses
+
 
 def run_net(args, config):
     # build dataset
@@ -90,7 +171,13 @@ def run_net(args, config):
         batch_start_time = time.time()
         batch_time = AverageMeter()
         data_time = AverageMeter()
-        losses = AverageMeter(["SparseLoss", "DenseLoss"])
+        # losses_list = []
+        # if "CD" in config.loss_metrics:
+        #     losses_list.extend(["SparseLoss", "DenseLoss"])
+        # if "OcclusionLoss" in config.loss_metrics:
+        #     losses_list.append("OcclusionLoss")
+
+        losses = AverageMeter(config.loss_metrics)
 
         num_iter = 0
 
@@ -104,32 +191,28 @@ def run_net(args, config):
             # npoints = config.dataset.train._base_.N_POINTS
             # dataset_name = config.dataset.train._base_.NAME
 
-            partial = data[0].to(args.device)
-            gt = data[1].to(args.device)
+            if config.dataset.return_normals:
+                partial = data[0][:, 0].to(args.device)
+                gt = data[1][:, 0].to(args.device)
+            else:
+                partial = data[0].to(args.device)
+                gt = data[1].to(args.device)
+
+            if config.dataset.return_antagonist:
+                antagonist = data[-1].to(args.device)
+            else:
+                antagonist = None
 
             num_iter += 1
 
             with torch.cuda.amp.autocast(enabled=args.use_amp_autocast):
-                # check if partial has nan
-                ret = base_model(partial)
-
-                if config.model.NAME in ["AdaPoinTr", "PoinTr", "PCN"]:
-                    sparse_loss, dense_loss = base_model.module.get_loss(
-                        ret=ret, gt=gt, epoch=epoch
-                    )
-                    if config.model.NAME == "AdaPoinTr":
-                        _loss = (
-                            sparse_loss + dense_loss
-                        )  # denseloss coeff is applied in model for adapointr
-                    else:
-                        _loss = sparse_loss + config.dense_loss_coeff * dense_loss
-
-                elif config.model.NAME == "CRAPCN":
-                    _loss, cra_losses = base_model.module.get_loss(
-                        ret=ret, gt=gt, partial=partial, config=config
-                    )
-                    sparse_loss = cra_losses[0]
-                    dense_loss = cra_losses[-1]
+                _loss, losses_batch = build_loss(
+                    base_model=base_model,
+                    partial=partial,
+                    gt=gt,
+                    config=config,
+                    antagonist=antagonist,
+                )
 
             _loss.backward()
 
@@ -148,11 +231,17 @@ def run_net(args, config):
                 # base_model.zero_grad()
 
             if args.distributed:
-                sparse_loss = dist_utils.reduce_tensor(sparse_loss, args)
-                dense_loss = dist_utils.reduce_tensor(dense_loss, args)
-                losses.update([sparse_loss.item(), dense_loss.item()])
+                for loss in losses_batch.keys():
+                    losses_batch[loss] = dist_utils.reduce_tensor(
+                        losses_batch[loss], args
+                    )
+                losses_batch_list = [losses_batch[loss] for loss in config.loss_metrics]
             else:
-                losses.update([sparse_loss.item(), dense_loss.item()])
+                losses_batch_list = [
+                    losses_batch[loss].item() for loss in config.loss_metrics
+                ]
+
+            losses.update(losses_batch_list)
 
             if args.distributed:
                 torch.cuda.synchronize()
@@ -185,7 +274,7 @@ def run_net(args, config):
             scheduler.step()
         epoch_end_time = time.time()
 
-        if epoch % args.val_freq == 0 and epoch != 0:
+        if epoch % args.val_freq == 0:  # and epoch != 0: CHANGE AGAIN
             # Validate the current model
             metrics = validate(base_model, val_dataloader, epoch, args, config)
 
@@ -234,14 +323,12 @@ def run_net(args, config):
                 )
 
         if args.log_data:
-            wandb.log(
-                {
-                    "epoch": epoch,
-                    "train/sparse_loss": losses.avg()[0],
-                    "train/dense_loss": losses.avg()[1],
-                },
-                step=epoch,
-            )
+            log_dict = EasyDict()
+            log_dict.epoch = epoch
+            for idx, loss in enumerate(config.loss_metrics):
+                log_dict[f"train/{loss}"] = losses.avg()[idx]
+
+            wandb.log(log_dict, step=epoch)
 
         epoch_allincl_end_time = time.time()
 
@@ -263,13 +350,22 @@ def validate(base_model, val_dataloader, epoch, args, config, logger=None):
     val_losses = AverageMeter(
         ["SparseLossL1", "SparseLossL2", "DenseLossL1", "DenseLossL2"]
     )
-    val_metrics = AverageMeter(Metrics.names())
+    val_metrics = AverageMeter(config.val_metrics)
 
     with torch.no_grad():
         for idx, data in enumerate(val_dataloader):
 
-            partial = data[0].to(args.device)
-            gt = data[1].to(args.device)
+            if config.dataset.return_normals:
+                partial = data[0][:, 0].to(args.device)
+                gt = data[1][:, 0].to(args.device)
+            else:
+                partial = data[0].to(args.device)
+                gt = data[1].to(args.device)
+
+            if config.dataset.return_antagonist:
+                antagonist = data[-1].to(args.device)
+            else:
+                antagonist = None
 
             with torch.cuda.amp.autocast(enabled=args.use_amp_autocast):
                 ret = base_model(partial)
@@ -354,17 +450,30 @@ def validate(base_model, val_dataloader, epoch, args, config, logger=None):
             #         losses[f"coarse-L{cd_norm}"] = losses[0]
             #         losses[f"dense-L{cd_norm}"] = losses[-1]
 
-            _metrics = Metrics.get(pred=dense_points, gt=gt, partial=partial)
+            _metrics = Metrics.get(
+                pred=dense_points,
+                gt=gt,
+                partial=partial,
+                antagonist=antagonist,
+                val_metrics=config.val_metrics,
+            )
 
             if args.distributed:
-                _metrics = [
-                    dist_utils.reduce_tensor(_metric, args).item()
-                    for _metric in _metrics
-                ]
+                for metric, value in _metrics.items():
+                    _metrics[metric] = dist_utils.reduce_tensor(value, args).item()
+                # _metrics = [
+                #     dist_utils.reduce_tensor(_metric, args).item()
+                #     for _metric in _metrics
+                # ]
             else:
-                _metrics = [_metric.item() for _metric in _metrics]
+                for metric, value in _metrics.items():
+                    _metrics[metric] = value.item()
 
-            val_metrics.update(_metrics)
+                # _metrics = [_metric.item() for _metric in _metrics]
+
+            val_metrics.update(
+                [_metrics[val_metric] for val_metric in config.val_metrics]
+            )
 
         if args.distributed:
             torch.cuda.synchronize()
