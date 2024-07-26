@@ -18,6 +18,7 @@ from easydict import EasyDict
 sys.path.append("/storage/share/code/01_scripts/modules/")
 
 import ml_tools.metrics as ml_metrics
+from ml_tools.metrics import ToothMetrics
 
 
 class Metrics(object):
@@ -54,9 +55,17 @@ class Metrics(object):
             "init_value": 32767,
         },
         {
-            "name": "ClusterLoss",
+            "name": "ClusterDistLoss",
             "enabled": True,
-            "eval_func": "cls._get_cluster_loss",
+            "eval_func": "cls._get_cluster_dist_loss",
+            "eval_object": None,
+            "is_greater_better": False,
+            "init_value": 32767,
+        },
+        {
+            "name": "ClusterNumLoss",
+            "enabled": True,
+            "eval_func": "cls._get_cluster_num_loss",
             "eval_object": None,
             "is_greater_better": False,
             "init_value": 32767,
@@ -98,10 +107,13 @@ class Metrics(object):
                 _values[item["name"]] = eval_func(full_pred, full_gt)
             elif any(
                 term in item["eval_func"]
-                for term in ["occlusion_loss", "cluster_distance_loss", "cluster_loss"]
+                for term in ["occlusion_loss", "cluster_dist_loss", "cluster_num_loss"]
             ):
                 assert antagonist is not None
-                _values[item["name"]] = eval_func(pred, gt, antagonist)
+                toothmetrics = ToothMetrics(recon=pred, gt=gt, antagonist=antagonist)
+                _values[item["name"]] = eval_func(toothmetrics)
+                # _values[item["name"]] = eval_func(pred, gt, antagonist)
+
             else:
                 _values[item["name"]] = eval_func(pred, gt)
 
@@ -115,18 +127,30 @@ class Metrics(object):
     def names(cls):
         _items = cls.items()
         return [i["name"] for i in _items]
+    
+    @classmethod
+    def _get_cluster_dist_loss(cls, toothmetrics):
+        return toothmetrics.get_cluster_dist_loss()
 
     @classmethod
-    def _get_cluster_distance_loss(cls, pred, gt, antagonist):
-        pass
+    def _get_cluster_num_loss(cls, toothmetrics):
+        return toothmetrics.get_cluster_num_loss()
 
     @classmethod
-    def _get_cluster_loss(cls, pred, gt, antagonist):
-        return ml_metrics.get_cluster_loss(recon=pred, gt=gt, antagonist=antagonist)
+    def _get_occlusion_loss(cls, toothmetrics):
+        return toothmetrics.get_occlusion_loss()
+    
+    # @classmethod
+    # def _get_cluster_distance_loss(cls, pred, gt, antagonist):
+    #     return ml_metrics.get_cluster_loss(recon=pred, gt=gt, antagonist=antagonist, return_losses=['cluster_num'])['cluster_num']
 
-    @classmethod
-    def _get_occlusion_loss(cls, pred, gt, antagonist):
-        return ml_metrics.get_occlusion_loss(recon=pred, gt=gt, antagonist=antagonist)
+    # @classmethod
+    # def _get_cluster_loss(cls, pred, gt, antagonist):
+    #     return ml_metrics.get_cluster_loss(recon=pred, gt=gt, antagonist=antagonist, return_losses=['cluster_num'])['cluster_num']
+
+    # @classmethod
+    # def _get_occlusion_loss(cls, pred, gt, antagonist):
+    #     return ml_metrics.get_occlusion_loss(recon=pred, gt=gt, antagonist=antagonist)
 
     @classmethod
     def _get_f_score(cls, pred, gt, th=0.01):

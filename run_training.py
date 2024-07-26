@@ -36,9 +36,9 @@ def main(rank=0, world_size=1):
 
     data_config = EasyDict(
         {
-            "num_points_gt": 2048,  # 2048
-            "num_points_corr": 16384,  # 16384
-            "num_points_corr_anta": 8192,  # 8192,
+            "num_points_gt": 512,  # 2048
+            "num_points_corr": 2048,  # 16384
+            "num_points_corr_anta": 1024,  # 8192,
             "num_points_corr_type": "full",
             "num_points_gt_type": "full",
             "tooth_range": {
@@ -120,14 +120,14 @@ def main(rank=0, world_size=1):
             },
             "max_epoch": 500,
             "consider_metric": "CDL2",
-            "loss_metrics": ["SparseLoss", "DenseLoss", "OcclusionLoss", "ClusterLoss"],
+            "loss_metrics": ["SparseLoss", "DenseLoss", "OcclusionLoss", "ClusterDistLoss", "ClusterNumLoss"],
             "val_metrics": [
                 "CDL1",
                 "CDL2",
                 "F-Score",
                 # "OcclusionLoss",
             ],
-            "total_bs": int(7 * world_size),  # CRAPCN: int(30*world_size),
+            "total_bs": int(30 * world_size),  # CRAPCN: int(30*world_size),
             "dense_loss_coeff": 0.1,  # 1.0,
             "step_per_update": 1,
             "grad_norm_clip": 5,
