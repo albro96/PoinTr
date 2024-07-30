@@ -98,6 +98,7 @@ class Metrics(object):
         _items = [item for item in cls.items() if item["name"] in val_metrics]
 
         _values = EasyDict()
+        toothmetrics = ToothMetrics(recon=pred, gt=gt, antagonist=antagonist)
 
         for i, item in enumerate(_items):
             eval_func = eval(item["eval_func"])
@@ -110,10 +111,7 @@ class Metrics(object):
                 for term in ["occlusion_loss", "cluster_dist_loss", "cluster_num_loss"]
             ):
                 assert antagonist is not None
-                toothmetrics = ToothMetrics(recon=pred, gt=gt, antagonist=antagonist)
                 _values[item["name"]] = eval_func(toothmetrics)
-                # _values[item["name"]] = eval_func(pred, gt, antagonist)
-
             else:
                 _values[item["name"]] = eval_func(pred, gt)
 
@@ -127,7 +125,7 @@ class Metrics(object):
     def names(cls):
         _items = cls.items()
         return [i["name"] for i in _items]
-    
+
     @classmethod
     def _get_cluster_dist_loss(cls, toothmetrics):
         return toothmetrics.get_cluster_dist_loss()
@@ -139,18 +137,6 @@ class Metrics(object):
     @classmethod
     def _get_occlusion_loss(cls, toothmetrics):
         return toothmetrics.get_occlusion_loss()
-    
-    # @classmethod
-    # def _get_cluster_distance_loss(cls, pred, gt, antagonist):
-    #     return ml_metrics.get_cluster_loss(recon=pred, gt=gt, antagonist=antagonist, return_losses=['cluster_num'])['cluster_num']
-
-    # @classmethod
-    # def _get_cluster_loss(cls, pred, gt, antagonist):
-    #     return ml_metrics.get_cluster_loss(recon=pred, gt=gt, antagonist=antagonist, return_losses=['cluster_num'])['cluster_num']
-
-    # @classmethod
-    # def _get_occlusion_loss(cls, pred, gt, antagonist):
-    #     return ml_metrics.get_occlusion_loss(recon=pred, gt=gt, antagonist=antagonist)
 
     @classmethod
     def _get_f_score(cls, pred, gt, th=0.01):

@@ -83,7 +83,7 @@ def main(rank=0, world_size=1):
             "ckpt_dir": None,
             "cfg_dir": None,
             "gt_partial_saved": False,
-            "log_data": False,  # if true: wandb logger on and save ckpts to local drive
+            "log_data": True,  # if true: wandb logger on and save ckpts to local drive
         }
     )
 
@@ -120,7 +120,13 @@ def main(rank=0, world_size=1):
             },
             "max_epoch": 500,
             "consider_metric": "CDL2",
-            "loss_metrics": ["SparseLoss", "DenseLoss", "OcclusionLoss", "ClusterDistLoss", "ClusterNumLoss"],
+            "loss_metrics": [
+                "SparseLoss",
+                "DenseLoss",
+                "OcclusionLoss",
+                "ClusterDistLoss",
+                "ClusterNumLoss",
+            ],
             "val_metrics": [
                 "CDL1",
                 "CDL2",
