@@ -13,6 +13,7 @@ import wandb
 from easydict import EasyDict
 import pytorch3d as p3d
 from pytorch3d.loss import chamfer_distance
+import torch.autograd.profiler as profiler
 
 sys.path.append("/storage/share/code/01_scripts/modules/")
 from general_tools.format import format_duration
@@ -20,7 +21,7 @@ from general_tools.format import format_duration
 # from ml_tools.metrics import get_occlusion_loss
 
 
-def build_loss(base_model, partial, gt, config, antagonist=None):
+def build_loss(base_model, partial, gt, config, antagonist=None, normalize=True):
     losses = EasyDict()
     # create keys from losses_list
     for key in config.loss_metrics:
@@ -42,7 +43,7 @@ def build_loss(base_model, partial, gt, config, antagonist=None):
 
     if "SparseLoss" in config.loss_metrics:
         if config.model.NAME in ["AdaPoinTr", "PoinTr", "PCN"]:
-            _loss += sparse_loss
+            _loss += sparse_loss * config.loss_coeffs.get("SparseLoss", 1.0)
             losses.SparseLoss = sparse_loss
 
         elif config.model.NAME == "CRAPCN":
@@ -53,16 +54,12 @@ def build_loss(base_model, partial, gt, config, antagonist=None):
                 losses.SparseLoss = cd_loss
                 losses.DenseLoss = cd_loss
             else:
-                _loss += sparse_loss
+                _loss += sparse_loss * config.loss_coeffs.get("SparseLoss", 1.0)
                 losses.SparseLoss = sparse_loss
 
     if "DenseLoss" in config.loss_metrics:
-        if config.model.NAME == "AdaPoinTr":
-            _loss += dense_loss
-            losses.DenseLoss = dense_loss
-
-        elif config.model.NAME in ["PoinTr", "PCN"]:
-            _loss += config.dense_loss_coeff * dense_loss
+        if config.model.NAME in ["AdaPoinTr", "PoinTr", "PCN"]:
+            _loss += dense_loss * config.loss_coeffs.get("DenseLoss", 1.0)
             losses.DenseLoss = dense_loss
 
         elif config.model.NAME == "CRAPCN":
@@ -71,7 +68,7 @@ def build_loss(base_model, partial, gt, config, antagonist=None):
             ):
                 pass
             else:
-                _loss += dense_loss
+                _loss += dense_loss * config.loss_coeffs.get("DenseLoss", 1.0)
                 losses.DenseLoss = dense_loss
 
     loss_metrics_filtered = [
@@ -89,12 +86,13 @@ def build_loss(base_model, partial, gt, config, antagonist=None):
             gt=gt,
             partial=None,
             antagonist=antagonist,
-            val_metrics=loss_metrics_filtered,
+            metrics=loss_metrics_filtered,
+            requires_grad=True,
         )
 
         for metric in loss_metrics_filtered:
             losses[metric] = metrics[metric]
-            _loss += metrics[metric]
+            _loss += metrics[metric] * config.loss_coeffs.get(metric, 1.0)
 
     return _loss, losses
 
@@ -115,7 +113,7 @@ def run_net(args, config):
         base_model.to(args.local_rank)
 
     # parameter setting
-    start_epoch = 0
+    start_epoch = 1
     best_metrics = None
     metrics = None
 
@@ -148,7 +146,10 @@ def run_net(args, config):
     if args.resume:
         builder.resume_optimizer(optimizer, args)
     scheduler = builder.build_scheduler(
-        base_model, optimizer, config, last_epoch=start_epoch - 1
+        base_model,
+        optimizer,
+        config,
+        last_epoch=-1 if start_epoch == 1 else start_epoch - 1,
     )
 
     if args.log_data:
@@ -171,11 +172,6 @@ def run_net(args, config):
         batch_start_time = time.time()
         batch_time = AverageMeter()
         data_time = AverageMeter()
-        # losses_list = []
-        # if "CD" in config.loss_metrics:
-        #     losses_list.extend(["SparseLoss", "DenseLoss"])
-        # if "OcclusionLoss" in config.loss_metrics:
-        #     losses_list.append("OcclusionLoss")
 
         losses = AverageMeter(config.loss_metrics)
 
@@ -184,6 +180,7 @@ def run_net(args, config):
         # base_model.train()  # set model to training mode
         n_batches = len(train_dataloader)
 
+        # with profiler.profile(record_shapes=True, use_cuda=True) as prof:
         for idx, data in enumerate(train_dataloader):
             optimizer.zero_grad()
             # print(train_dataloader.dataset.patient, train_dataloader.dataset.tooth)
@@ -237,6 +234,7 @@ def run_net(args, config):
                     )
                 losses_batch_list = [losses_batch[loss] for loss in config.loss_metrics]
             else:
+                # print("losses_batch", losses_batch)
                 losses_batch_list = [
                     losses_batch[loss].item() for loss in config.loss_metrics
                 ]
@@ -258,6 +256,8 @@ def run_net(args, config):
                     end="\r",
                 )
 
+        # print(prof.key_averages().table(sort_by="cuda_time_total"))
+
         if args.sweep and args.log_data:
             print(
                 f'\rAgent: {wandb.run.id} Epoch [{epoch}/{config.max_epoch}] Losses = {[f"{l:.4f}"  for l in losses.val()]} lr = {optimizer.param_groups[0]["lr"]:.6f}'
@@ -274,7 +274,7 @@ def run_net(args, config):
             scheduler.step()
         epoch_end_time = time.time()
 
-        if epoch % args.val_freq == 0:  # and epoch != 0: CHANGE AGAIN
+        if epoch % args.val_freq == 0:
             # Validate the current model
             metrics = validate(base_model, val_dataloader, epoch, args, config)
 
@@ -300,7 +300,7 @@ def run_net(args, config):
                 base_model, optimizer, epoch, metrics, best_metrics, "ckpt-last", args
             )
             # save every 100 epoch
-            if epoch % 100 == 0 and epoch != 0:
+            if epoch % 100 == 0:
                 builder.save_checkpoint(
                     base_model,
                     optimizer,
@@ -347,9 +347,9 @@ def validate(base_model, val_dataloader, epoch, args, config, logger=None):
     # print(f"\n[VALIDATION] Start validating epoch {epoch}")
     base_model.eval()  # set model to eval mode
 
-    val_losses = AverageMeter(
-        ["SparseLossL1", "SparseLossL2", "DenseLossL1", "DenseLossL2"]
-    )
+    # val_losses = AverageMeter(
+    #     ["SparseLossL1", "SparseLossL2", "DenseLossL1", "DenseLossL2"]
+    # )
     val_metrics = AverageMeter(config.val_metrics)
 
     with torch.no_grad():
@@ -386,85 +386,47 @@ def validate(base_model, val_dataloader, epoch, args, config, logger=None):
                                 "type": "lidar/beta",
                                 "points": dense_points[0].detach().cpu().numpy(),
                             }
-                        )
-                    },
-                    step=epoch,
-                )
-                wandb.log(
-                    {
+                        ),
                         f"val/pcd/coarse/{val_dataloader.dataset.tooth}": wandb.Object3D(
                             {
                                 "type": "lidar/beta",
                                 "points": coarse_points[0].detach().cpu().numpy(),
                             }
-                        )
-                    },
-                    step=epoch,
-                )
-                wandb.log(
-                    {
+                        ),
                         f"val/pcd/full-dense/{val_dataloader.dataset.tooth}": wandb.Object3D(
                             {
                                 "type": "lidar/beta",
                                 "points": full_dense[0].detach().cpu().numpy(),
                             }
-                        )
-                    },
-                    step=epoch,
-                )
-                wandb.log(
-                    {
+                        ),
                         f"val/pcd/gt/{val_dataloader.dataset.tooth}": wandb.Object3D(
                             {
                                 "type": "lidar/beta",
                                 "points": gt[0].detach().cpu().numpy(),
                             }
-                        )
-                    },
-                    step=epoch,
-                )
-                wandb.log(
-                    {
+                        ),
                         f"val/pcd/partial/{val_dataloader.dataset.tooth}": wandb.Object3D(
                             {
                                 "type": "lidar/beta",
                                 "points": partial[0].detach().cpu().numpy(),
                             }
-                        )
+                        ),
                     },
                     step=epoch,
                 )
-
-            # losses = {}
-            # for cd_norm in [1, 2]:
-            #     if config.model.NAME in ["AdaPoinTr", "PoinTr", "PCN"]:
-            #         losses[f"coarse-L{cd_norm}"], losses[f"dense-L{cd_norm}"] = (
-            #             base_model.module.get_loss(
-            #                 ret=ret, gt=gt, epoch=epoch, cd_norm=cd_norm
-            #             )
-            #         )
-            #     elif config.model.NAME == "CRAPCN":
-            #         _, losses = base_model.module.get_loss(
-            #             ret=ret, gt=gt, partial=partial, config=config, cd_norm=cd_norm
-            #         )
-            #         losses[f"coarse-L{cd_norm}"] = losses[0]
-            #         losses[f"dense-L{cd_norm}"] = losses[-1]
 
             _metrics = Metrics.get(
                 pred=dense_points,
                 gt=gt,
                 partial=partial,
                 antagonist=antagonist,
-                val_metrics=config.val_metrics,
+                metrics=config.val_metrics,
+                requires_grad=False,
             )
 
             if args.distributed:
                 for metric, value in _metrics.items():
                     _metrics[metric] = dist_utils.reduce_tensor(value, args).item()
-                # _metrics = [
-                #     dist_utils.reduce_tensor(_metric, args).item()
-                #     for _metric in _metrics
-                # ]
             else:
                 for metric, value in _metrics.items():
                     _metrics[metric] = value.item()
@@ -488,7 +450,11 @@ def validate(base_model, val_dataloader, epoch, args, config, logger=None):
     if args.log_data:
         wandb.log(log_dict, step=epoch)
 
-    return Metrics(config.consider_metric, val_metrics.avg())
+    return Metrics(
+        metric_name=config.consider_metric,
+        values=val_metrics.avg(),
+        metrics=config.val_metrics,
+    )
 
 
 crop_ratio = {"easy": 1 / 4, "median": 1 / 2, "hard": 3 / 4}

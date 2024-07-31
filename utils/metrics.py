@@ -71,34 +71,20 @@ class Metrics(object):
             "init_value": 32767,
         },
     ]
-    # , {
-    #     'name': 'EMDistance',
-    #     'enabled': True,
-    #     'eval_func': 'cls._get_emd_distance',
-    #     'eval_object': emd.emdModule(),
-    #     'is_greater_better': False,
-    #     'init_value': 32767
-    # }]
-
-    # @classmethod
-    # def get(cls, pred, gt, require_emd=False):
-    #     _items = cls.items()
-    #     _values = [0] * len(_items)
-    #     for i, item in enumerate(_items):
-    #         if not require_emd and 'emd' in item['eval_func']:
-    #             _values[i] = torch.tensor(0.).to(gt.device)
-    #         else:
-    #             eval_func = eval(item['eval_func'])
-    #             _values[i] = eval_func(pred, gt)
-
-    #     return _values
 
     @classmethod
-    def get(cls, pred, gt, partial=None, antagonist=None, val_metrics=None):
-        _items = [item for item in cls.items() if item["name"] in val_metrics]
+    def get(
+        cls, pred, gt, partial=None, antagonist=None, metrics=None, requires_grad=False
+    ):
+        _items = [item for item in cls.items() if item["name"] in metrics]
 
         _values = EasyDict()
-        toothmetrics = ToothMetrics(recon=pred, gt=gt, antagonist=antagonist)
+        # print(
+        #     f"Initialzing ToothMetrics with pred shape: {pred.shape}, gt shape: {gt.shape}, antagonist shape: {antagonist.shape}"
+        # )
+        toothmetrics = ToothMetrics(
+            recon=pred, gt=gt, antagonist=antagonist, requires_grad=requires_grad
+        )
 
         for i, item in enumerate(_items):
             eval_func = eval(item["eval_func"])
@@ -194,8 +180,16 @@ class Metrics(object):
         emd_out = torch.mean(torch.sqrt(dist))
         return emd_out * 1
 
-    def __init__(self, metric_name, values):
-        self._items = Metrics.items()
+    def __init__(self, metric_name, values, metrics=None):
+        # set ITEMS to only include metrics
+        if metrics is not None:
+            self._items = [i for i in Metrics.items() if i["name"] in metrics]
+            self._items = sorted(self._items, key=lambda x: metrics.index(x["name"]))
+
+        assert metric_name in Metrics.names(), f"Invalid metric name: {metric_name}"
+
+        # self._items = Metrics.items() # this is original
+
         self._values = [item["init_value"] for item in self._items]
         self.metric_name = metric_name
 

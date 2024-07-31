@@ -127,7 +127,10 @@ class PoinTr(nn.Module):
         # loss_coarse = self.loss_func(ret[0], gt)
         # loss_fine = self.loss_func(ret[1], gt)
         loss_coarse = chamfer_distance(
-            ret[0], gt, norm=cd_norm, single_directional=True
+            ret[0],
+            gt,
+            norm=cd_norm,
+            single_directional=True,
         )[0]
 
         loss_fine = chamfer_distance(ret[1], gt, norm=cd_norm)[0]

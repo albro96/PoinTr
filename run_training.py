@@ -43,7 +43,7 @@ def main(rank=0, world_size=1):
             "num_points_gt_type": "full",
             "tooth_range": {
                 "corr": "full",
-                "gt": "full",  # "full",  # "full",
+                "gt": [36],  # "full",  # "full",
                 "jaw": "full",
                 "quadrants": "all",
             },
@@ -66,14 +66,14 @@ def main(rank=0, world_size=1):
             "launcher": "pytorch" if world_size > 1 else "none",
             "num_gpus": world_size,
             "local_rank": rank,
-            "num_workers": 16,  # only applies to mode='train', set to 0 for val and test
+            "num_workers": 0,  # only applies to mode='train', set to 0 for val and test
             "seed": 0,
             "deterministic": False,
             "sync_bn": False,
             "experiment_dir": pada.model_base_dir,
             "start_ckpts": None,
             "ckpts": None,
-            "val_freq": 1,
+            "val_freq": 100,
             "test_freq": None,
             "resume": False,
             "test": False,
@@ -83,7 +83,7 @@ def main(rank=0, world_size=1):
             "ckpt_dir": None,
             "cfg_dir": None,
             "gt_partial_saved": False,
-            "log_data": True,  # if true: wandb logger on and save ckpts to local drive
+            "log_data": False,  # if true: wandb logger on and save ckpts to local drive
         }
     )
 
@@ -119,7 +119,7 @@ def main(rank=0, world_size=1):
                 "cd_norm": 2,
             },
             "max_epoch": 500,
-            "consider_metric": "CDL2",
+            "consider_metric": "CDL2",  # "CDL2",
             "loss_metrics": [
                 "SparseLoss",
                 "DenseLoss",
@@ -132,9 +132,17 @@ def main(rank=0, world_size=1):
                 "CDL2",
                 "F-Score",
                 # "OcclusionLoss",
+                # "ClusterDistLoss",
+                # "ClusterNumLoss",
             ],
             "total_bs": int(30 * world_size),  # CRAPCN: int(30*world_size),
-            "dense_loss_coeff": 0.1,  # 1.0,
+            "loss_coeffs": {
+                "SparseLoss": 1.0,
+                "DenseLoss": 1.0,
+                "OcclusionLoss": 1.0,
+                "ClusterDistLoss": 1.0,
+                "ClusterNumLoss": 1.0,
+            },
             "step_per_update": 1,
             "grad_norm_clip": 5,
             "model_name": "PoinTr",  # "PoinTr", 'CRAPCN'
@@ -360,6 +368,9 @@ def main(rank=0, world_size=1):
         # update wandb config
         wandb.config.update(config, allow_val_change=True)
 
+    assert (
+        config.consider_metric in config.val_metrics
+    ), f"{config.consider_metric} not in config.val_metrics"
     # pprint(wandb.config)
     pprint(config)
 
