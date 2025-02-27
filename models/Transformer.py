@@ -125,9 +125,9 @@ class Attention(nn.Module):
         self.num_heads = num_heads
         head_dim = dim // num_heads
         # NOTE scale factor was wrong in my original version, can set manually to be compat with prev weights
-        self.scale = qk_scale or head_dim**-0.5
+        self.scale = qk_scale or head_dim**-0.5 # second one is the original one from the attention is all you need paper
 
-        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias) # query, key, value in one linear layer
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
@@ -146,7 +146,7 @@ class Attention(nn.Module):
         )  # make torchscript happy (cannot use tensor as tuple)
 
         attn = (q @ k.transpose(-2, -1)) * self.scale
-        attn = attn.softmax(dim=-1)
+        attn = attn.softmax(dim=-1) # using the full attention matrix, not the tril one --> every point can see every other point
         attn = self.attn_drop(attn)
 
         x = (attn @ v).transpose(1, 2).reshape(B, N, C)
@@ -447,6 +447,7 @@ class PCTransformer(nn.Module):
         self.coarse_pred = nn.Sequential(
             nn.Linear(1024, 1024), nn.ReLU(inplace=True), nn.Linear(1024, 3 * num_query)
         )
+        #  Since the architecture uses Conv1d, it is designed to capture local spatial relationships in 1D data (e.g., sequence or time-series data). MLPs, however, treat all input data as independent, ignoring any spatial relationships.
         self.mlp_query = nn.Sequential(
             nn.Conv1d(1024 + 3, 1024, 1),
             # nn.BatchNorm1d(1024),

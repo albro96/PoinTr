@@ -8,9 +8,11 @@
 import logging
 import open3d
 import torch
-from extensions.chamfer_dist import ChamferDistanceL1, ChamferDistanceL2
+
+# from extensions.chamfer_dist import ChamferDistanceL1, ChamferDistanceL2
 import os
-from extensions.emd import emd_module as emd
+
+# from extensions.emd import emd_module as emd
 from pytorch3d.loss import chamfer_distance
 import sys
 from easydict import EasyDict
@@ -22,6 +24,7 @@ from ml_tools.metrics import ToothMetrics
 
 
 class Metrics(object):
+    __version__ = "0.1"
     ITEMS = [
         {
             "name": "F-Score",
@@ -76,7 +79,11 @@ class Metrics(object):
     def get(
         cls, pred, gt, partial=None, antagonist=None, metrics=None, requires_grad=False
     ):
-        _items = [item for item in cls.items() if item["name"] in metrics]
+        _items = (
+            [item for item in cls.items() if item["name"] in metrics]
+            if metrics is not None
+            else cls.items()
+        )
 
         _values = EasyDict()
         # print(
@@ -165,13 +172,11 @@ class Metrics(object):
 
     @classmethod
     def _get_chamfer_distancel1(cls, pred, gt):
-        # chamfer_distance = cls.ITEMS[1]['eval_object']
-        return chamfer_distance(pred, gt, norm=1)[0] * 1
+        return chamfer_distance(pred, gt, norm=1)[0]
 
     @classmethod
     def _get_chamfer_distancel2(cls, pred, gt):
-        # chamfer_distance = cls.ITEMS[2]['eval_object']
-        return chamfer_distance(pred, gt, norm=2)[0] * 1
+        return chamfer_distance(pred, gt, norm=2)[0]
 
     @classmethod
     def _get_emd_distance(cls, pred, gt, eps=0.005, iterations=100):

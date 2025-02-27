@@ -36,14 +36,14 @@ def main(rank=0, world_size=1):
 
     data_config = EasyDict(
         {
-            "num_points_gt": 512,  # 2048
-            "num_points_corr": 2048,  # 16384
-            "num_points_corr_anta": 1024,  # 8192,
+            "num_points_gt": 2048,  # 2048
+            "num_points_corr": 8192,  # 16384
+            "num_points_corr_anta": 8192,  # 8192,
             "num_points_corr_type": "full",
             "num_points_gt_type": "full",
             "tooth_range": {
                 "corr": "full",
-                "gt": [36],  # "full",  # "full",
+                "gt": [6],  # "full",  # "full",
                 "jaw": "full",
                 "quadrants": "all",
             },
@@ -57,7 +57,11 @@ def main(rank=0, world_size=1):
             "create_cache_file": True,
             "overwrite_cache_file": False,
             "return_antagonist": True,
-            "return_normals": True,
+            "return_normals": False,
+            'merge_corr_anta': True,
+            "dataset": "orthodental",
+            "data_dir": "/storage/share/nobackup/data/orthodental/data/datahash_final/full_single_normals",
+            "datahash": "e17fbdc8",
         }
     )
 
@@ -73,7 +77,7 @@ def main(rank=0, world_size=1):
             "experiment_dir": pada.model_base_dir,
             "start_ckpts": None,
             "ckpts": None,
-            "val_freq": 100,
+            "val_freq": 10,
             "test_freq": None,
             "resume": False,
             "test": False,
@@ -83,7 +87,7 @@ def main(rank=0, world_size=1):
             "ckpt_dir": None,
             "cfg_dir": None,
             "gt_partial_saved": False,
-            "log_data": False,  # if true: wandb logger on and save ckpts to local drive
+            "log_data": True,  # if true: wandb logger on and save ckpts to local drive
         }
     )
 
@@ -123,9 +127,9 @@ def main(rank=0, world_size=1):
             "loss_metrics": [
                 "SparseLoss",
                 "DenseLoss",
-                "OcclusionLoss",
-                "ClusterDistLoss",
-                "ClusterNumLoss",
+                # "OcclusionLoss",
+                # "ClusterDistLoss",
+                # "ClusterNumLoss",
             ],
             "val_metrics": [
                 "CDL1",
@@ -135,7 +139,7 @@ def main(rank=0, world_size=1):
                 # "ClusterDistLoss",
                 # "ClusterNumLoss",
             ],
-            "total_bs": int(30 * world_size),  # CRAPCN: int(30*world_size),
+            "total_bs": int(3 * world_size),  # CRAPCN: int(30*world_size),
             "loss_coeffs": {
                 "SparseLoss": 1.0,
                 "DenseLoss": 1.0,

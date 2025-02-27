@@ -113,7 +113,7 @@ def run_net(args, config):
         base_model.to(args.local_rank)
 
     # parameter setting
-    start_epoch = 1
+    start_epoch = 0
     best_metrics = None
     metrics = None
 
@@ -373,7 +373,10 @@ def validate(base_model, val_dataloader, epoch, args, config, logger=None):
             coarse_points = ret[0]
             dense_points = ret[-1]
 
-            if val_dataloader.dataset.patient == "0U1LI1CB" and args.log_data:
+            if (
+                val_dataloader.dataset.patient == "0U1LI1CB"
+                or val_dataloader.dataset.patient == "0538") and args.log_data:
+                print('Logging PCDs')
                 if not config.model.NAME == "CRAPCN":
                     full_dense = torch.cat([partial, dense_points], dim=1)
                 else:
