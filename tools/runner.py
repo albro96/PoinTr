@@ -14,14 +14,41 @@ from easydict import EasyDict
 import pytorch3d as p3d
 from pytorch3d.loss import chamfer_distance
 import torch.autograd.profiler as profiler
-
+from torch.nn import functional as F
 sys.path.append("/storage/share/code/01_scripts/modules/")
 from general_tools.format import format_duration
 
 # from ml_tools.metrics import get_occlusion_loss
 
 
-def build_loss(base_model, partial, gt, config, antagonist=None, normalize=True):
+def calc_adaptive_weight(losses, config, args):
+    geom_metrics = []
+
+    for idx, loss in enumerate(config.loss_metrics):
+        if loss in ["SparseLoss", "DenseLoss"]: 
+            geom_metrics.append(losses.avg()[idx])
+
+    if (
+        any([metric in Metrics.OCCLUSIONFUNCS.keys() for metric in config.loss_metrics])
+        and geom_metrics
+    ):
+        mean_geom_loss = torch.mean(torch.tensor(geom_metrics))
+        scores = torch.tensor(
+            [
+                config.adaptive_loss_steepness * (config.adaptive_loss_thresh - mean_geom_loss),
+                config.adaptive_loss_steepness * (mean_geom_loss - config.adaptive_loss_thresh),
+            ],
+            device=args.device,
+        )
+
+        # Compute softmax over the two scores.
+        return F.softmax(scores, dim=0)[0].item()
+    else:
+        ValueError("No occlusion losses in config")
+    
+
+
+def build_loss(base_model, partial, gt, config, antagonist=None, normalize=True, occl_weight=None):
     losses = EasyDict()
     # create keys from losses_list
     for key in config.loss_metrics:
@@ -74,12 +101,6 @@ def build_loss(base_model, partial, gt, config, antagonist=None, normalize=True)
     loss_metrics_filtered = [
         metric for metric in config.loss_metrics if metric in Metrics.names()
     ]
-
-    if any([term in config.loss_metrics for term in ["OcclusionLoss", "ClusterLoss"]]):
-        assert (
-            antagonist is not None
-        ), "Antagonist is required for OcclusionLoss or ClusterLoss"
-
     if loss_metrics_filtered:
         metrics = Metrics.get(
             pred=recon,
@@ -92,7 +113,12 @@ def build_loss(base_model, partial, gt, config, antagonist=None, normalize=True)
 
         for metric in loss_metrics_filtered:
             losses[metric] = metrics[metric]
-            _loss += metrics[metric] * config.loss_coeffs.get(metric, 1.0)
+
+            metric_loss = metrics[metric] * config.loss_coeffs.get(metric, 1.0)
+
+            if config.adaptive_loss and metric in Metrics.OCCLUSIONFUNCS.keys():
+                metric_loss *= occl_weight
+            _loss += metric_loss
 
     return _loss, losses
 
@@ -160,7 +186,12 @@ def run_net(args, config):
     epoch_time_list = []
 
     # base_model.zero_grad()
+    occl_weights = [0.0]
+
     for epoch in range(start_epoch, config.max_epoch + 1):
+        window_size = 5 if len(occl_weights) > 5 else len(occl_weights)
+        occl_weight = torch.mean(torch.tensor(occl_weights[-window_size:])).item() if config.adaptive_loss else 1.0
+
         epoch_start_time = time.time()
         epoch_allincl_start_time = time.time()
 
@@ -182,6 +213,7 @@ def run_net(args, config):
 
         # with profiler.profile(record_shapes=True, use_cuda=True) as prof:
         for idx, data in enumerate(train_dataloader):
+
             optimizer.zero_grad()
             # print(train_dataloader.dataset.patient, train_dataloader.dataset.tooth)
             data_time.update(time.time() - batch_start_time)
@@ -209,6 +241,7 @@ def run_net(args, config):
                     gt=gt,
                     config=config,
                     antagonist=antagonist,
+                    occl_weight=occl_weight,
                 )
 
             _loss.backward()
@@ -255,6 +288,8 @@ def run_net(args, config):
                     f'\r[Epoch {epoch}/{config.max_epoch}][Batch {idx}/{n_batches}] BatchTime = {format_duration(batch_time.val(-1))} Loss = {_loss:.4f} lr = {optimizer.param_groups[0]["lr"]:.6f}',
                     end="\r",
                 )
+            del _loss
+            torch.cuda.empty_cache()
 
         # print(prof.key_averages().table(sort_by="cuda_time_total"))
 
@@ -322,9 +357,14 @@ def run_net(args, config):
                     args,
                 )
 
+        if config.adaptive_loss:
+            occl_weights.append(calc_adaptive_weight(losses, config, args))
+
         if args.log_data:
             log_dict = EasyDict()
             log_dict.epoch = epoch
+            if config.adaptive_loss:
+                log_dict.occl_weight = occl_weight
             for idx, loss in enumerate(config.loss_metrics):
                 log_dict[f"train/{loss}"] = losses.avg()[idx]
 

@@ -24,7 +24,16 @@ from ml_tools.metrics import ToothMetrics
 
 
 class Metrics(object):
-    __version__ = "0.1"
+    __version__ = "0.2"
+    OCCLUSIONFUNCS = {
+                    'OcclusionLoss': "cd_occlusion_loss",
+                    'PenetrationLoss': "penetration_loss",
+                    'ClusterDistLoss': "cluster_dist_loss",
+                    'ClusterPosLoss': "cluster_position_loss",
+                    'ClusterNumLoss': "cluster_num_loss",
+                    'InvIOULoss': "inv_iou_loss",
+    }
+
     ITEMS = [
         {
             "name": "F-Score",
@@ -49,31 +58,19 @@ class Metrics(object):
             "is_greater_better": False,
             "init_value": 32767,
         },
-        {
-            "name": "OcclusionLoss",
-            "enabled": True,
-            "eval_func": "cls._get_occlusion_loss",
-            "eval_object": None,
-            "is_greater_better": False,
-            "init_value": 32767,
-        },
-        {
-            "name": "ClusterDistLoss",
-            "enabled": True,
-            "eval_func": "cls._get_cluster_dist_loss",
-            "eval_object": None,
-            "is_greater_better": False,
-            "init_value": 32767,
-        },
-        {
-            "name": "ClusterNumLoss",
-            "enabled": True,
-            "eval_func": "cls._get_cluster_num_loss",
-            "eval_object": None,
-            "is_greater_better": False,
-            "init_value": 32767,
-        },
     ]
+    ITEMS.extend(
+        [
+            {
+                "name": key,
+                "enabled": True,
+                "eval_func": val,
+                "is_greater_better": False,
+                "init_value": 32767,
+            }
+            for key, val in OCCLUSIONFUNCS.items()
+        ]
+    )
 
     @classmethod
     def get(
@@ -90,23 +87,21 @@ class Metrics(object):
         #     f"Initialzing ToothMetrics with pred shape: {pred.shape}, gt shape: {gt.shape}, antagonist shape: {antagonist.shape}"
         # )
         toothmetrics = ToothMetrics(
-            recon=pred, gt=gt, antagonist=antagonist, requires_grad=requires_grad
+            recon=pred, gt=gt, antagonist=antagonist, requires_grad=requires_grad, clear_intermediate_results=True
         )
 
         for i, item in enumerate(_items):
-            eval_func = eval(item["eval_func"])
-            if "f_score" in item["eval_func"]:
-                full_pred = torch.concatenate([pred, partial], dim=1)
-                full_gt = torch.concatenate([gt, partial], dim=1)
-                _values[item["name"]] = eval_func(full_pred, full_gt)
-            elif any(
-                term in item["eval_func"]
-                for term in ["occlusion_loss", "cluster_dist_loss", "cluster_num_loss"]
-            ):
+            if item['name'] in cls.OCCLUSIONFUNCS.keys():
                 assert antagonist is not None
-                _values[item["name"]] = eval_func(toothmetrics)
+                _values[item["name"]] = toothmetrics.get(item["eval_func"])
             else:
-                _values[item["name"]] = eval_func(pred, gt)
+                eval_func = eval(item["eval_func"])
+                if "f_score" in item["eval_func"]:
+                    full_pred = torch.concatenate([pred, partial], dim=1)
+                    full_gt = torch.concatenate([gt, partial], dim=1)
+                    _values[item["name"]] = eval_func(full_pred, full_gt)
+                else:
+                    _values[item["name"]] = eval_func(pred, gt)
 
         return _values
 

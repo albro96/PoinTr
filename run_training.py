@@ -57,8 +57,8 @@ def main(rank=0, world_size=1):
             "create_cache_file": True,
             "overwrite_cache_file": False,
             "return_antagonist": True,
-            "return_normals": False,
-            'merge_corr_anta': True,
+            "return_normals": True,
+            "merge_corr_anta": True,
             "dataset": "orthodental",
             "data_dir": "/storage/share/nobackup/data/orthodental/data/datahash_final/full_single_normals",
             "datahash": "e17fbdc8",
@@ -122,22 +122,28 @@ def main(rank=0, world_size=1):
                 "gt_type": data_config.gt_type,
                 "cd_norm": 2,
             },
-            "max_epoch": 500,
+            "max_epoch": 300,
             "consider_metric": "CDL2",  # "CDL2",
             "loss_metrics": [
                 "SparseLoss",
                 "DenseLoss",
-                # "OcclusionLoss",
-                # "ClusterDistLoss",
-                # "ClusterNumLoss",
+                "OcclusionLoss",
+                "ClusterDistLoss",
+                "ClusterNumLoss",
+                "ClusterPosLoss",
+                "PenetrationLoss",
+                # "InvIOULoss",
             ],
             "val_metrics": [
                 "CDL1",
                 "CDL2",
                 "F-Score",
-                # "OcclusionLoss",
-                # "ClusterDistLoss",
-                # "ClusterNumLoss",
+                "OcclusionLoss",
+                "ClusterDistLoss",
+                "ClusterNumLoss",
+                "ClusterPosLoss",
+                "PenetrationLoss",
+                "InvIOULoss",
             ],
             "total_bs": int(3 * world_size),  # CRAPCN: int(30*world_size),
             "loss_coeffs": {
@@ -145,11 +151,17 @@ def main(rank=0, world_size=1):
                 "DenseLoss": 1.0,
                 "OcclusionLoss": 1.0,
                 "ClusterDistLoss": 1.0,
+                "ClusterPosLoss": 1.0,
                 "ClusterNumLoss": 1.0,
+                "PenetrationLoss": 1.0,
+                "InvIOULoss": 1.0,
             },
             "step_per_update": 1,
             "grad_norm_clip": 5,
             "model_name": "PoinTr",  # "PoinTr", 'CRAPCN'
+            "adaptive_loss": True,
+            "adaptive_loss_thresh": 2,
+            "adaptive_loss_steepness": 1.0,  # higher values more abrupt change around adaptive_loss_thresh
         }
     )
 
@@ -372,10 +384,13 @@ def main(rank=0, world_size=1):
         # update wandb config
         wandb.config.update(config, allow_val_change=True)
 
-    assert (
-        config.consider_metric in config.val_metrics
-    ), f"{config.consider_metric} not in config.val_metrics"
-    # pprint(wandb.config)
+    occlusion_metrics = ['OcclusionLoss', 'ClusterDistLoss', 'ClusterNumLoss', 'ClusterPosLoss', 'PenetrationLoss']
+    if config.consider_metric not in config.val_metrics or (config.adaptive_loss and not any([metric in config.loss_metrics for metric in occlusion_metrics])):
+        print('Invalid Config')
+        raise ValueError('Invalid Config')
+
+        
+
     pprint(config)
 
     torch.autograd.set_detect_anomaly(True)
