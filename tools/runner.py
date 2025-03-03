@@ -45,7 +45,6 @@ def calc_adaptive_weight(losses, config, args):
         return F.softmax(scores, dim=0)[0].item()
     else:
         ValueError("No occlusion losses in config")
-    
 
 
 def build_loss(base_model, partial, gt, config, antagonist=None, normalize=True, occl_weight=None):
@@ -187,10 +186,14 @@ def run_net(args, config):
 
     # base_model.zero_grad()
     occl_weights = [0.0]
+    window_size = 10
 
     for epoch in range(start_epoch, config.max_epoch + 1):
-        window_size = 5 if len(occl_weights) > 5 else len(occl_weights)
-        occl_weight = torch.mean(torch.tensor(occl_weights[-window_size:])).item() if config.adaptive_loss else 1.0
+
+        if len(occl_weights) < window_size:
+            occl_weight = 0.0
+        else:
+            occl_weight = torch.mean(torch.tensor(occl_weights[-window_size:])).item()
 
         epoch_start_time = time.time()
         epoch_allincl_start_time = time.time()

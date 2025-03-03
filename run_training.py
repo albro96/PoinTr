@@ -37,13 +37,13 @@ def main(rank=0, world_size=1):
     data_config = EasyDict(
         {
             "num_points_gt": 2048,  # 2048
-            "num_points_corr": 8192,  # 16384
+            "num_points_corr": 16384,  # 16384
             "num_points_corr_anta": 8192,  # 8192,
             "num_points_corr_type": "full",
             "num_points_gt_type": "full",
             "tooth_range": {
                 "corr": "full",
-                "gt": [6],  # "full",  # "full",
+                "gt":  [6], #[6],  # # full"
                 "jaw": "full",
                 "quadrants": "all",
             },
@@ -58,10 +58,11 @@ def main(rank=0, world_size=1):
             "overwrite_cache_file": False,
             "return_antagonist": True,
             "return_normals": True,
-            "merge_corr_anta": True,
             "dataset": "orthodental",
-            "data_dir": "/storage/share/nobackup/data/orthodental/data/datahash_final/full_single_normals",
+            "data_dir": None,
             "datahash": "e17fbdc8",
+            "gingiva": True,
+            "crop_anta": True,
         }
     )
 
@@ -124,16 +125,15 @@ def main(rank=0, world_size=1):
             },
             "max_epoch": 300,
             "consider_metric": "CDL2",  # "CDL2",
-            "loss_metrics": [
-                "SparseLoss",
-                "DenseLoss",
-                "OcclusionLoss",
-                "ClusterDistLoss",
-                "ClusterNumLoss",
-                "ClusterPosLoss",
-                "PenetrationLoss",
-                # "InvIOULoss",
-            ],
+            "loss_metric_dict": {
+                "SparseLoss": True,
+                "DenseLoss": True,
+                "OcclusionLoss": True,
+                "ClusterDistLoss": True,
+                "ClusterNumLoss": True,
+                "ClusterPosLoss": True,
+                "PenetrationLoss": True,
+            },
             "val_metrics": [
                 "CDL1",
                 "CDL2",
@@ -160,8 +160,8 @@ def main(rank=0, world_size=1):
             "grad_norm_clip": 5,
             "model_name": "PoinTr",  # "PoinTr", 'CRAPCN'
             "adaptive_loss": True,
-            "adaptive_loss_thresh": 2,
-            "adaptive_loss_steepness": 1.0,  # higher values more abrupt change around adaptive_loss_thresh
+            "adaptive_loss_thresh": 2.0,
+            "adaptive_loss_steepness": 2.0,  # higher values more abrupt change around adaptive_loss_thresh
         }
     )
 
@@ -380,16 +380,20 @@ def main(rank=0, world_size=1):
     else:
         config.bs = config.total_bs
 
-    if args.log_data:
-        # update wandb config
-        wandb.config.update(config, allow_val_change=True)
+    config['loss_metrics'] = [key for key, value in config.loss_metric_dict.items() if value]
+
+
 
     occlusion_metrics = ['OcclusionLoss', 'ClusterDistLoss', 'ClusterNumLoss', 'ClusterPosLoss', 'PenetrationLoss']
-    if config.consider_metric not in config.val_metrics or (config.adaptive_loss and not any([metric in config.loss_metrics for metric in occlusion_metrics])):
+    if config.consider_metric not in config.val_metrics: # or (config.adaptive_loss and not any([metric in config.loss_metrics for metric in occlusion_metrics])):
         print('Invalid Config')
         raise ValueError('Invalid Config')
 
-        
+    config.adaptive_loss = config.adaptive_loss and any([metric in config.loss_metrics for metric in occlusion_metrics])
+
+    if args.log_data:
+        # update wandb config
+        wandb.config.update(config, allow_val_change=True)
 
     pprint(config)
 
