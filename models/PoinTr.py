@@ -91,8 +91,7 @@ class PoinTr(nn.Module):
         self.num_pred = config.num_pred
         self.num_query = config.num_query
         self.gt_type = config.get("gt_type", "full")
-        self.cd_norm = config.cd_norm
-
+        
         self.fold_step = int(pow(self.num_pred // self.num_query, 0.5) + 0.5)
         self.base_model = PCTransformer(
             in_chans=3,
@@ -120,20 +119,16 @@ class PoinTr(nn.Module):
     # self.loss_func = ChamferDistanceL1()
     # self.loss_func = ChamferDistanceL2()
 
-    def get_loss(self, ret, gt, epoch=0, cd_norm=None):
-        if cd_norm is None:
-            cd_norm = self.cd_norm
-
-        # loss_coarse = self.loss_func(ret[0], gt)
-        # loss_fine = self.loss_func(ret[1], gt)
-        loss_coarse = chamfer_distance(
-            ret[0],
-            gt,
-            norm=cd_norm,
-            single_directional=True,
-        )[0]
-
-        loss_fine = chamfer_distance(ret[1], gt, norm=cd_norm)[0]
+    def get_loss(self, ret, gt, epoch=0, loss_func=None, square=False):
+        if loss_func is None:
+            loss_coarse = chamfer_distance(ret[0], gt, norm=2, single_directional=True)[0]
+            loss_fine = chamfer_distance(ret[1], gt, norm=2)[0]/2
+            if not square:
+                loss_coarse = torch.sqrt(loss_coarse)
+                loss_fine = torch.sqrt(loss_fine)
+        else:
+            loss_coarse = loss_func(ret[0], gt, single_directional=True)
+            loss_fine = loss_func(ret[1], gt)
 
         return loss_coarse, loss_fine
 

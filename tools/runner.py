@@ -59,7 +59,11 @@ def build_loss(base_model, partial, gt, config, antagonist=None, normalize=True,
     recon = ret[-1]
 
     if config.model.NAME in ["AdaPoinTr", "PoinTr", "PCN"]:
-        sparse_loss, dense_loss = base_model.module.get_loss(ret=ret, gt=gt)
+        loss_func = None
+        if config.loss_cd_type == 'InfoCDL2':
+            loss_func = Metrics._get_info_chamfer_distancel2
+        sparse_loss, dense_loss = base_model.module.get_loss(ret=ret, gt=gt, loss_func=loss_func)
+
     elif config.model.NAME == "CRAPCN":
         cd_loss, cra_losses = base_model.module.get_loss(
             ret=ret, gt=gt, partial=partial, config=config

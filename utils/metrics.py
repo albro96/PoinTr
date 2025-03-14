@@ -8,7 +8,7 @@
 import logging
 import open3d
 import torch
-
+from utils.Chamfer3D.dist_chamfer_3D import chamfer_3DDist
 # from extensions.chamfer_dist import ChamferDistanceL1, ChamferDistanceL2
 import os
 
@@ -54,6 +54,14 @@ class Metrics(object):
             "name": "CDL2",
             "enabled": True,
             "eval_func": "cls._get_chamfer_distancel2",
+            "eval_object": None,
+            "is_greater_better": False,
+            "init_value": 32767,
+        },
+        {
+            "name": "InfoCDL2",
+            "enabled": True,
+            "eval_func": "cls._get_info_chamfer_distancel2",
             "eval_object": None,
             "is_greater_better": False,
             "init_value": 32767,
@@ -114,17 +122,6 @@ class Metrics(object):
         _items = cls.items()
         return [i["name"] for i in _items]
 
-    @classmethod
-    def _get_cluster_dist_loss(cls, toothmetrics):
-        return toothmetrics.get_cluster_dist_loss()
-
-    @classmethod
-    def _get_cluster_num_loss(cls, toothmetrics):
-        return toothmetrics.get_cluster_num_loss()
-
-    @classmethod
-    def _get_occlusion_loss(cls, toothmetrics):
-        return toothmetrics.get_occlusion_loss()
 
     @classmethod
     def _get_f_score(cls, pred, gt, th=0.01):
@@ -172,6 +169,36 @@ class Metrics(object):
     @classmethod
     def _get_chamfer_distancel2(cls, pred, gt):
         return chamfer_distance(pred, gt, norm=2)[0]
+
+    @classmethod
+    def _get_info_chamfer_distancel2(cls, pred, gt, single_directional=False, point_reduction="mean", square=False):
+        assert point_reduction in ["mean", "sum"]
+        red_fun = torch.mean if point_reduction == "mean" else torch.sum
+
+        chamfer_dist = chamfer_3DDist()
+        dist1, dist2, idx1, idx2 = chamfer_dist(pred, gt)
+        dist1 = torch.clamp(dist1, min=1e-9)
+        
+        d1 = torch.sqrt(dist1) if not square else dist1
+        distances1 = - torch.log(torch.exp(-0.5 * d1)/(torch.sum(torch.exp(-0.5 * d1) + 1e-7,dim=-1).unsqueeze(-1))**1e-7)
+        if single_directional:
+            return red_fun(distances1) 
+        else:
+            dist2 = torch.clamp(dist2, min=1e-9)
+            d2 = torch.sqrt(dist2) if not square else dist2
+            distances2 = - torch.log(torch.exp(-0.5 * d2)/(torch.sum(torch.exp(-0.5 * d2) + 1e-7,dim=-1).unsqueeze(-1))**1e-7)
+            return (red_fun(distances1) + red_fun(distances2)) / 2
+
+    # def calc_cd_one_side_like_InfoV2(p1, p2):
+    #     chamfer_dist = chamfer_3DDist()
+    #     dist1, dist2, idx1, idx2 = chamfer_dist(p1, p2)
+    #     dist1 = torch.clamp(dist1, min=1e-9)
+    #     dist2 = torch.clamp(dist2, min=1e-9)
+    #     d1 = torch.sqrt(dist1)
+    #     d2 = torch.sqrt(dist2)
+
+    #     distances1 = - torch.log(torch.exp(-0.5 * d1)/(torch.sum(torch.exp(-0.5 * d1) + 1e-7,dim=-1).unsqueeze(-1))**1e-7)
+    #     return torch.sum(distances1)
 
     @classmethod
     def _get_emd_distance(cls, pred, gt, eps=0.005, iterations=100):

@@ -38,7 +38,7 @@ def main(rank=0, world_size=1):
         {
             "num_points_gt": 2048,  # 2048
             "num_points_corr": 16384,  # 16384
-            "num_points_corr_anta": 8192,  # 8192,
+            "num_points_corr_anta": 4096,  # 8192,
             "num_points_corr_type": "full",
             "num_points_gt_type": "full",
             "tooth_range": {
@@ -121,22 +121,23 @@ def main(rank=0, world_size=1):
             "dataset": data_config,
             "model": {
                 "gt_type": data_config.gt_type,
-                "cd_norm": 2,
             },
             "max_epoch": 300,
             "consider_metric": "CDL2",  # "CDL2",
+            'loss_cd_type': 'InfoCDL2', # 'CDL2', 'InfoCDL2'
             "loss_metric_dict": {
-                "SparseLoss": True,
+                "SparseLoss": False,
                 "DenseLoss": True,
-                "OcclusionLoss": True,
-                "ClusterDistLoss": True,
-                "ClusterNumLoss": True,
-                "ClusterPosLoss": True,
-                "PenetrationLoss": True,
+                "OcclusionLoss": False,
+                "ClusterDistLoss": False,
+                "ClusterNumLoss": False,
+                "ClusterPosLoss": False,
+                "PenetrationLoss": False,
             },
             "val_metrics": [
                 "CDL1",
                 "CDL2",
+                'InfoCDL2',
                 "F-Score",
                 "OcclusionLoss",
                 "ClusterDistLoss",
