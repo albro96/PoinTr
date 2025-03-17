@@ -482,6 +482,7 @@ def validate(base_model, val_dataloader, epoch, args, config, logger=None):
                     _metrics[metric] = value.item()
 
                 # _metrics = [_metric.item() for _metric in _metrics]
+            
 
             val_metrics.update(
                 [_metrics[val_metric] for val_metric in config.val_metrics]
@@ -513,11 +514,11 @@ crop_ratio = {"easy": 1 / 4, "median": 1 / 2, "hard": 3 / 4}
 def test_net(args, config):
     # logger = get_logger(args.log_name)
     print("Tester start ... ")
-    _, test_dataloader = builder.dataset_builder(args, config.dataset, mode="test")
+    _, test_dataloader = builder.dataset_builder(args, config.dataset, mode="test", bs=1)
 
     base_model = builder.model_builder(config.model)
     # load checkpoints
-    builder.load_model(base_model, args.ckpts)
+    builder.load_model(base_model, args.ckpt_path)
     if args.use_gpu:
         base_model.to(args.local_rank)
 
@@ -528,51 +529,78 @@ def test_net(args, config):
     test(base_model, test_dataloader, args, config)
 
 
-def test(base_model, test_dataloader, args, config, logger=None, epoch=None):
-
+def test(base_model, test_dataloader, args, config):
     base_model.eval()  # set model to eval mode
 
-    test_losses = AverageMeter(
-        ["SparseLossL1", "SparseLossL2", "DenseLossL1", "DenseLossL2"]
-    )
-    test_metrics = AverageMeter(Metrics.names())
-    # category_metrics = dict()
-    n_samples = len(test_dataloader)  # bs is 1
+    test_metrics = {metric: [] for metric in config.val_metrics}
+
 
     with torch.no_grad():
-        for data in test_dataloader:
+        for idx, data in enumerate(test_dataloader):
 
-            partial = data[0].to(args.device)
-            gt = data[1].to(args.device)
+            if config.dataset.return_normals:
+                partial = data[0][:, 0].to(args.device)
+                gt = data[1][:, 0].to(args.device)
+            else:
+                partial = data[0].to(args.device)
+                gt = data[1].to(args.device)
+
+            if config.dataset.return_antagonist:
+                antagonist = data[-1].to(args.device)
+            else:
+                antagonist = None
 
             with torch.cuda.amp.autocast(enabled=args.use_amp_autocast):
                 ret = base_model(partial)
+
             coarse_points = ret[0]
             dense_points = ret[-1]
 
-            sparse_loss_l1 = chamfer_distance(coarse_points, gt, norm=1)[0]
-            sparse_loss_l2 = chamfer_distance(coarse_points, gt, norm=2)[0]
-            dense_loss_l1 = chamfer_distance(dense_points, gt, norm=1)[0]
-            dense_loss_l2 = chamfer_distance(dense_points, gt, norm=2)[0]
+            if args.log_data:
+                print('Logging PCDs')
+                if not config.model.NAME == "CRAPCN":
+                    full_dense = torch.cat([partial, dense_points], dim=1)
+                else:
+                    full_dense = dense_points
 
-            test_losses.update(
-                [
-                    sparse_loss_l1.item(),
-                    sparse_loss_l2.item(),
-                    dense_loss_l1.item(),
-                    dense_loss_l2.item(),
-                ]
+                
+
+            _metrics = Metrics.get(
+                pred=dense_points,
+                gt=gt,
+                partial=partial,
+                antagonist=antagonist,
+                metrics=config.val_metrics,
+                requires_grad=False,
             )
 
-            _metrics = Metrics.get(pred=dense_points, gt=gt, partial=partial)
-            test_metrics.update(_metrics)
+            if args.distributed:
+                for metric, value in _metrics.items():
+                    _metrics[metric] = dist_utils.reduce_tensor(value, args).item()
+            else:
+                for metric, value in _metrics.items():
+                    _metrics[metric] = value.item()
+            
+
+            for metric in test_metrics:
+                test_metrics[metric].append(_metrics[metric])
+
+
+        if args.distributed:
+            torch.cuda.synchronize()
 
     print("============================ TEST RESULTS ============================")
-    log_dict = {}  # {'test/epoch': epoch}
-    for metric, value in zip(test_metrics.items, test_metrics.avg()):
-        log_dict[f"test/{metric}"] = value
-        print(f"{metric}: {value:.6f}")
-    if args.log_data:
-        wandb.log(log_dict, step=epoch)
+    # print(test_metrics)
+    for metric, value in test_metrics.items():
+        print(f"{metric}: {torch.median(torch.tensor(value)):.6f}")
 
-    return
+    # log_dict = {}  # {'val/epoch': epoch}
+    # for metric, value in zip(test_metrics.items, test_metrics.avg()):
+    #     log_dict[f"test/{metric}"] = value
+    #     print(f"{metric}: {value:.6f}")
+
+    # return Metrics(
+    #     metric_name=config.consider_metric,
+    #     values=test_metrics.avg(),
+    #     metrics=config.test_metrics,
+    # )

@@ -18,7 +18,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(BASE_DIR, "../"))
 sys.path.append("/storage/share/code/01_scripts/modules/")
 
-from os_tools.import_dir_path import import_dir_path
+from os_tools.import_dir_path import import_dir_path, convert_path
 
 from tools import run_net
 from tools import test_net
@@ -77,18 +77,17 @@ def main(rank=0, world_size=1):
             "sync_bn": False,
             "experiment_dir": pada.model_base_dir,
             "start_ckpts": None,
-            "ckpts": None,
             "val_freq": 10,
-            "test_freq": None,
             "resume": False,
-            "test": False,
             "mode": None,
             "save_checkpoints": True,
-            "save_only_best": True,
+            "save_only_best": False,
             "ckpt_dir": None,
             "cfg_dir": None,
+            "test": True,
+            'ckpt_path': convert_path(r"O:\data\models\PoinTr\sweep\PoinTr-infocd-vs-cd\ckpt\ckpt-best-logical-sweep-4.pth"),
             "gt_partial_saved": False,
-            "log_data": True,  # if true: wandb logger on and save ckpts to local drive
+            "log_data": False,  # if true: wandb logger on and save ckpts to local drive
         }
     )
 
@@ -258,8 +257,6 @@ def main(rank=0, world_size=1):
     if args.resume and args.start_ckpts is not None:
         raise ValueError("--resume and --start_ckpts cannot be both activate")
 
-    if args.test and args.ckpts is None:
-        raise ValueError("ckpts shouldnt be None while test mode")
 
     if args.local_rank is not None:
         if "LOCAL_RANK" not in os.environ:
@@ -302,6 +299,18 @@ def main(rank=0, world_size=1):
     if args.distributed:
         assert args.local_rank == torch.distributed.get_rank()
 
+
+    if args.test:
+        assert args.ckpt_path is not None, "Please provide ckpt_path for testing"
+        model_name = "-".join(op.basename(args.ckpt_path).split('.')[0].split('-')[2:5])
+        cfg_path = op.join(Path(args.ckpt_path).parent.parent, "config", f'config-{model_name}.json')
+        with open(cfg_path, "r") as json_file:
+            config = EasyDict(json.load(json_file))
+        pprint(config)
+        test_net(args, config)
+        return
+
+        
     if args.log_data:
         wandb.init(
             # set the wandb project where this run will be logged, dont set config here, else sweep will fail
@@ -343,10 +352,8 @@ def main(rank=0, world_size=1):
     if config.model.NAME == "AdaPoinTr":
         config.model.dense_loss_coeff = config.dense_loss_coeff
 
-    if args.log_data:
-        args.sweep = True if "sweep" in wandb_config else False
-    else:
-        args.sweep = False
+    args.sweep = True if "sweep" in wandb_config else False
+    args.log_data = args.sweep or args.log_data
 
     args.experiment_path = os.path.join(args.experiment_dir, config.model_name)
 
@@ -355,7 +362,7 @@ def main(rank=0, world_size=1):
             args.experiment_path, "sweep", wandb.run.sweep_id
         )
 
-    if args.log_data:
+    if args.log_data and not args.test:
         if not os.path.exists(args.experiment_path):
             os.makedirs(args.experiment_path, exist_ok=True)
             print("Create experiment path successfully at %s" % args.experiment_path)
@@ -373,7 +380,7 @@ def main(rank=0, world_size=1):
 
         with open(os.path.join(args.cfg_dir, cfg_name), "w") as json_file:
             json_file.write(json.dumps(config, indent=4))
-
+        
     # batch size
     if args.distributed:
         assert config.total_bs % world_size == 0
@@ -382,8 +389,6 @@ def main(rank=0, world_size=1):
         config.bs = config.total_bs
 
     config['loss_metrics'] = [key for key, value in config.loss_metric_dict.items() if value]
-
-
 
     occlusion_metrics = ['OcclusionLoss', 'ClusterDistLoss', 'ClusterNumLoss', 'ClusterPosLoss', 'PenetrationLoss']
     if config.consider_metric not in config.val_metrics: # or (config.adaptive_loss and not any([metric in config.loss_metrics for metric in occlusion_metrics])):
@@ -399,12 +404,7 @@ def main(rank=0, world_size=1):
     pprint(config)
 
     torch.autograd.set_detect_anomaly(True)
-
-    # run
-    if args.test:
-        test_net(args, config)
-    else:
-        run_net(args, config)
+    run_net(args, config)
 
 
 # ---------------------------------------- #

@@ -25,6 +25,7 @@ from ml_tools.metrics import ToothMetrics
 
 class Metrics(object):
     __version__ = "0.2"
+    NO_OCCLUSION_VALUE = 100
     OCCLUSIONFUNCS = {
                     'OcclusionLoss': "cd_occlusion_loss",
                     'PenetrationLoss': "penetration_loss",
@@ -95,7 +96,7 @@ class Metrics(object):
         #     f"Initialzing ToothMetrics with pred shape: {pred.shape}, gt shape: {gt.shape}, antagonist shape: {antagonist.shape}"
         # )
         toothmetrics = ToothMetrics(
-            recon=pred, gt=gt, antagonist=antagonist, requires_grad=requires_grad, clear_intermediate_results=True
+            recon=pred, gt=gt, antagonist=antagonist, requires_grad=requires_grad, clear_intermediate_results=True, no_occlusion_value=cls.NO_OCCLUSION_VALUE
         )
 
         for i, item in enumerate(_items):
