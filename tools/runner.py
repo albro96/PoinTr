@@ -511,10 +511,113 @@ def validate(base_model, val_dataloader, epoch, args, config, logger=None):
 crop_ratio = {"easy": 1 / 4, "median": 1 / 2, "hard": 3 / 4}
 
 
+# def test_net(args, config):
+#     # logger = get_logger(args.log_name)
+#     print("Tester start ... ")
+#     _, test_dataloader = builder.dataset_builder(args, config.dataset, mode="test", bs=1)
+
+#     base_model = builder.model_builder(config.model)
+#     # load checkpoints
+#     builder.load_model(base_model, args.ckpt_path)
+#     if args.use_gpu:
+#         base_model.to(args.local_rank)
+
+#     #  DDP
+#     if args.distributed:
+#         raise NotImplementedError()
+
+#     test(base_model, test_dataloader, args, config)
+
 def test_net(args, config):
-    # logger = get_logger(args.log_name)
-    print("Tester start ... ")
-    _, test_dataloader = builder.dataset_builder(args, config.dataset, mode="test", bs=1)
+    import trimesh
+    from tqdm import tqdm
+    from hashlib import sha256
+    import pickle
+    from datasets.TeethSegDataset import fps_with_normals
+    from pytorch3d.ops import sample_farthest_points as fps
+
+    print(f"Tester start ... on device: {args.device} ")
+
+    data_dir = "/storage/share/data/3d-datasets/studscan/data/"
+    cache_dir = "/storage/share/data/3d-datasets/studscan/cache/"
+    
+    cache_dict = {
+        "num_points_corr": config.dataset.num_points_corr,
+        "num_points_gt": config.dataset.num_points_gt,
+        "num_points_corr_anta": config.dataset.num_points_corr_anta,
+        'return_normals': config.dataset.return_normals,
+        'return_antagonist': config.dataset.return_antagonist,
+    }
+
+    # create hash
+    cache_hash = sha256(
+                json.dumps(cache_dict, sort_keys=True).encode()
+            ).hexdigest()[:8]
+
+    cache_file_path = os.path.join(cache_dir, f"test_dataloader_{cache_hash}.pkl")
+
+    if os.path.exists(cache_file_path):
+        with open(cache_file_path, "rb") as f:
+            test_dataloader = pickle.load(f)
+        print("Loaded test dataloader from cache")
+        # return test_dataloader
+    else:
+        patients = os.listdir(data_dir)
+        test_dataloader = []
+        for patient in tqdm(patients):
+            patient_dir = os.path.join(data_dir, patient)
+
+            lower_path = os.path.join(patient_dir, f'{patient}_lower_corr.stl')
+            upper_path = os.path.join(patient_dir, f'{patient}_upper.stl')
+            gt_path = os.path.join(patient_dir, f'{patient}_gt.stl')
+            anta_path = os.path.join(patient_dir, f'{patient}_anta.stl')
+
+            lower_mesh = trimesh.load_mesh(lower_path, process=False)
+            lower = torch.tensor(lower_mesh.vertices, device=args.device).unsqueeze(0)
+            upper_mesh = trimesh.load_mesh(upper_path, process=False)
+            upper = torch.tensor(upper_mesh.vertices, device=args.device).unsqueeze(0)
+            anta_mesh = trimesh.load_mesh(anta_path, process=False)
+            anta = torch.tensor(anta_mesh.vertices, device=args.device).unsqueeze(0)
+            anta_norm = torch.tensor(anta_mesh.vertex_normals, device=args.device).unsqueeze(0)
+
+            gt_mesh= trimesh.load_mesh(gt_path, process=False)
+            gt = torch.tensor(gt_mesh.vertices, device=args.device).unsqueeze(0)
+            
+            if config.dataset.return_normals:
+                gt_norm = torch.tensor(gt_mesh.vertex_normals, device=args.device).unsqueeze(0).unsqueeze(0)
+                gt = torch.cat([gt.unsqueeze(0), gt_norm], dim=1)
+                gt = fps_with_normals(gt, n_points=config.dataset.num_points_gt)
+            else:
+                gt, _ = fps(gt, K=config.dataset.num_points_gt)
+
+            n_pts_corr_half = int(config.dataset.num_points_corr/2)
+            if config.dataset.return_normals:
+                lower_norm = torch.tensor(lower_mesh.vertex_normals, device=args.device).unsqueeze(0).unsqueeze(0)
+                lower = torch.cat([lower.unsqueeze(0), lower_norm], dim=1)
+                lower = fps_with_normals(lower, n_points=n_pts_corr_half)
+
+                upper_norm = torch.tensor(upper_mesh.vertex_normals, device=args.device).unsqueeze(0).unsqueeze(0)
+                upper = torch.cat([upper.unsqueeze(0), upper_norm], dim=1)
+                upper = fps_with_normals(upper, n_points=n_pts_corr_half)
+            else:
+                lower, _ = fps(lower, K=n_pts_corr_half)
+                upper, _ = fps(upper, K=n_pts_corr_half)
+
+            corr = torch.cat([lower, upper], dim=-2)
+
+            anta = torch.cat([anta.unsqueeze(0), anta_norm.unsqueeze(0)], dim=1)
+            anta = fps_with_normals(anta, n_points=config.dataset.num_points_corr_anta)
+
+            corr = corr.float()
+            gt = gt.float()
+            anta = anta.float()
+
+            test_dataloader.append((corr, gt, anta))
+
+        os.makedirs(cache_dir, exist_ok=True)
+        # save test_dataloader as pkl
+        with open(cache_file_path, "wb") as f:
+            pickle.dump(test_dataloader, f)
 
     base_model = builder.model_builder(config.model)
     # load checkpoints
@@ -529,14 +632,20 @@ def test_net(args, config):
     test(base_model, test_dataloader, args, config)
 
 
+
 def test(base_model, test_dataloader, args, config):
+    from pcd_tools.data_processing import torch_to_o3d
+    from tqdm import tqdm
+
+    save_dir = os.path.join(args.experiment_path, 'test_data', os.path.basename(args.ckpt_path).split('.')[0], 'pcd')
+
     base_model.eval()  # set model to eval mode
 
     test_metrics = {metric: [] for metric in config.val_metrics}
 
 
     with torch.no_grad():
-        for idx, data in enumerate(test_dataloader):
+        for idx, data in tqdm(enumerate(test_dataloader)):
 
             if config.dataset.return_normals:
                 partial = data[0][:, 0].to(args.device)
@@ -563,8 +672,13 @@ def test(base_model, test_dataloader, args, config):
                 else:
                     full_dense = dense_points
 
+            if args.log_testdata:
+                os.makedirs(save_dir, exist_ok=True)
+                torch_to_o3d(dense_points, os.path.join(save_dir, f'{idx:02d}_dense.pcd'))
+                torch_to_o3d(partial, os.path.join(save_dir, f'{idx:02d}_partial.pcd'))
+                torch_to_o3d(gt, os.path.join(save_dir, f'{idx:02d}_gt.pcd'))
+                torch_to_o3d(antagonist, os.path.join(save_dir, f'{idx:02d}_anta.pcd'))
                 
-
             _metrics = Metrics.get(
                 pred=dense_points,
                 gt=gt,
@@ -590,9 +704,45 @@ def test(base_model, test_dataloader, args, config):
             torch.cuda.synchronize()
 
     print("============================ TEST RESULTS ============================")
-    # print(test_metrics)
+    if args.log_testdata:
+        import pickle
+        metric_dir = os.path.dirname(save_dir)
+        print(f"Test data saved to {metric_dir}")
+        with open(os.path.join(metric_dir, 'test_metrics.pkl'), 'wb') as f:
+            pickle.dump(test_metrics, f)
+        # calc mean, median, etc and save to json
+        metrics_dict = EasyDict({'all': {}, 'cleaned': {}})
+        filter_arr = torch.tensor(test_metrics['ClusterPosLoss']) != args.no_occlusion_val
+        metrics_dict['all']['num_success'] = torch.sum(filter_arr).item()
+        metrics_dict['all']['num_failed'] = len(test_metrics['ClusterPosLoss']) - metrics_dict['all']['num_success']
+
+        for calctype in ['all', 'cleaned']:
+            for metric, value in test_metrics.items():
+                value = torch.tensor(value)
+                if calctype == 'cleaned':
+                    value = value[filter_arr]
+
+                metrics_dict[calctype][metric] = {
+                    'mean': torch.mean(value).item(),
+                    'median': torch.median(value).item(),
+                    'min': torch.min(value).item(),
+                    'max': torch.max(value).item(),
+                    '75th': torch.quantile(value, 0.75).item(),
+                    '25th': torch.quantile(value, 0.25).item(),
+                    '95th': torch.quantile(value, 0.95).item(),
+                    '99th': torch.quantile(value, 0.99).item(),
+                }
+
+        with open(os.path.join(metric_dir, 'test_metrics.json'), 'w') as f:
+            json.dump(metrics_dict, f, indent=4)
+            
+            
     for metric, value in test_metrics.items():
+        # count occurences of args.no_occlusion_val
+        if metric in ['OcclusionLoss', 'ClusterDistLoss', 'ClusterNumLoss', 'ClusterPosLoss', 'PenetrationLoss']:
+            ctr = value.count(args.no_occlusion_val)
         print(f"{metric}: {torch.median(torch.tensor(value)):.6f}")
+    print(f"Failed Occlusions: {ctr} / {len(test_metrics['OcclusionLoss'])}")
 
     # log_dict = {}  # {'val/epoch': epoch}
     # for metric, value in zip(test_metrics.items, test_metrics.avg()):

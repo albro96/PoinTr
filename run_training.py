@@ -36,14 +36,14 @@ def main(rank=0, world_size=1):
 
     data_config = EasyDict(
         {
-            "num_points_gt": 2048,  # 2048
-            "num_points_corr": 16384,  # 16384
-            "num_points_corr_anta": 4096,  # 8192,
+            "num_points_gt": 2048,
+            "num_points_corr": 16384,
+            "num_points_corr_anta": 1024,
             "num_points_corr_type": "full",
             "num_points_gt_type": "full",
             "tooth_range": {
                 "corr": "full",
-                "gt":  [6], #[6],  # # full"
+                "gt":  [6], #[6],  5# # full"
                 "jaw": "full",
                 "quadrants": "all",
             },
@@ -51,7 +51,7 @@ def main(rank=0, world_size=1):
             "gt_type": "single",
             "data_type": "npy",
             "samplingmethod": "fps",
-            "downsample_steps": 2,
+            "downsample_steps": 1,
             "use_fixed_split": True,
             "enable_cache": True,
             "create_cache_file": True,
@@ -63,6 +63,9 @@ def main(rank=0, world_size=1):
             "datahash": "e17fbdc8",
             "gingiva": True,
             "crop_anta": True,
+            'crop_anta_thresh': 2,
+            'normalize_pose': False,
+            'normalize_scale': False,
         }
     )
 
@@ -84,10 +87,12 @@ def main(rank=0, world_size=1):
             "save_only_best": False,
             "ckpt_dir": None,
             "cfg_dir": None,
-            "test": True,
-            'ckpt_path': convert_path(r"O:\data\models\PoinTr\sweep\PoinTr-infocd-vs-cd\ckpt\ckpt-best-logical-sweep-4.pth"),
+            "test": False,
+            'log_testdata': True,
+            'ckpt_path': convert_path(r"O:\data\models\PoinTr\sweep\PoinTr-infocd-vs-cd\ckpt\ckpt-best-serene-sweep-8.pth"),
             "gt_partial_saved": False,
             "log_data": False,  # if true: wandb logger on and save ckpts to local drive
+            'no_occlusion_val': 100
         }
     )
 
@@ -299,7 +304,6 @@ def main(rank=0, world_size=1):
     if args.distributed:
         assert args.local_rank == torch.distributed.get_rank()
 
-
     if args.test:
         assert args.ckpt_path is not None, "Please provide ckpt_path for testing"
         model_name = "-".join(op.basename(args.ckpt_path).split('.')[0].split('-')[2:5])
@@ -307,10 +311,11 @@ def main(rank=0, world_size=1):
         with open(cfg_path, "r") as json_file:
             config = EasyDict(json.load(json_file))
         pprint(config)
+        args.experiment_path = os.path.join(args.experiment_dir, config.model_name)
         test_net(args, config)
         return
-
-        
+    
+    wandb_config =None
     if args.log_data:
         wandb.init(
             # set the wandb project where this run will be logged, dont set config here, else sweep will fail
@@ -352,7 +357,11 @@ def main(rank=0, world_size=1):
     if config.model.NAME == "AdaPoinTr":
         config.model.dense_loss_coeff = config.dense_loss_coeff
 
-    args.sweep = True if "sweep" in wandb_config else False
+    if wandb_config is not None:
+        args.sweep = True if "sweep" in wandb_config else False
+    else:
+        args.sweep = False
+
     args.log_data = args.sweep or args.log_data
 
     args.experiment_path = os.path.join(args.experiment_dir, config.model_name)
