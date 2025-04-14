@@ -2,24 +2,13 @@ import torch
 from torch import nn
 
 from pointnet2_ops import pointnet2_utils
-from extensions.chamfer_dist import ChamferDistanceL1, ChamferDistanceL2
-from .Transformer import PCTransformer
+from .SequenceTransformer import PCTransformer
 from .build import MODELS
 
 from pytorch3d.loss import chamfer_distance
-import os
+from pytorch3d.ops import sample_farthest_points as fps
 
-
-def fps(pc, num):
-    fps_idx = pointnet2_utils.furthest_point_sample(pc, num)
-    sub_pc = (
-        pointnet2_utils.gather_operation(pc.transpose(1, 2).contiguous(), fps_idx)
-        .transpose(1, 2)
-        .contiguous()
-    )
-    return sub_pc
-
-
+    
 class Fold(nn.Module):
     def __init__(self, in_channel, step, hidden_dim=512):
         super().__init__()
@@ -83,7 +72,7 @@ class Fold(nn.Module):
 
 
 @MODELS.register_module()
-class PoinTr(nn.Module):
+class TST(nn.Module):
     def __init__(self, config, **kwargs):
         super().__init__()
         self.trans_dim = config.trans_dim
@@ -114,11 +103,6 @@ class PoinTr(nn.Module):
             nn.Conv1d(1024, 1024, 1),
         )
         self.reduce_map = nn.Linear(self.trans_dim + 1027, self.trans_dim)
-        # self.build_loss_func()
-
-    # def build_loss_func(self):
-    # self.loss_func = ChamferDistanceL1()
-    # self.loss_func = ChamferDistanceL2()
 
     def get_loss(self, ret, gt, config=None, epoch=0, loss_func=None, square=False):
 
@@ -135,44 +119,53 @@ class PoinTr(nn.Module):
 
         return loss_coarse, loss_fine
 
-    def forward(self, xyz):
-        q, coarse_point_cloud = self.base_model(xyz)  # B M C and B M 3
-
+    def forward(self, allteeth, fdi, corrmask, gtmask, trafo, anta):
+        """
+        allteeth: [B, 28, 2, 2048, 3] (points in channel 0, normals in channel 1)
+        fdi:      [B, 28]
+        trafo:    [B, 28, 7]
+        corrmask, gtmask, anta: other inputs for later use
+        """
+        B = allteeth.size(0)
+        T = allteeth.size(1)  # fixed to 28 teeth
+        
+        # Select only the point coordinates (channel 0)
+        # Resulting shape: [B, 28, 2048, 3]
+        tooth_points = allteeth[:, :, 0, :, :]
+        
+        # Flatten batch and teeth so each tooth is processed independently:
+        tooth_points = tooth_points.view(B * T, 2048, 3).transpose(1, 2)  # [B*28, 3, 2048]
+        
+        # Pass through a lightweight Conv1d-based extractor to get a feature vector per tooth.
+        tooth_feats = self.tooth_extractor(tooth_points)  # [B*28, trans_dim, 2048]
+        tooth_feats = torch.max(tooth_feats, dim=2)[0]      # [B*28, trans_dim]
+        tooth_feats = tooth_feats.view(B, T, -1)            # [B, 28, trans_dim]
+        
+        # Get FDI embeddings and transform trafo (e.g., project 7D into D_dim)
+        fdi_embed = self.fdi_embedding(fdi.long())          # [B, 28, fdi_dim]
+        trafo_embed = self.trafo_proj(trafo)                  # [B, 28, trafo_dim]
+        
+        # Concatenate to build token for each tooth:
+        tokens = torch.cat([tooth_feats, fdi_embed, trafo_embed], dim=-1)  # [B, 28, token_dim]
+        
+        # Feed the dental tokens to the transformer backbone.
+        # Assume that PCTransformer (base_model) has been adjusted to accept token sequences.
+        q, coarse_points = self.base_model(tokens)
+        
+        # (Rest of the network, such as the foldingNet to produce the dense output, remains similar.)
         B, M, C = q.shape
-
-        global_feature = self.increase_dim(q.transpose(1, 2)).transpose(
-            1, 2
-        )  # B M 1024
-        global_feature = torch.max(global_feature, dim=1)[0]  # B 1024
-
+        global_feature = self.increase_dim(q.transpose(1, 2)).transpose(1, 2)
+        global_feature = torch.max(global_feature, dim=1)[0]
         rebuild_feature = torch.cat(
-            [global_feature.unsqueeze(-2).expand(-1, M, -1), q, coarse_point_cloud],
+            [global_feature.unsqueeze(-2).expand(-1, M, -1), q, coarse_points],
             dim=-1,
-        )  # B M 1027 + C
-
-        rebuild_feature = self.reduce_map(rebuild_feature.reshape(B * M, -1))  # BM C
-        # # NOTE: try to rebuild pc
-        # coarse_point_cloud = self.refine_coarse(rebuild_feature).reshape(B, M, 3)
-
-        # NOTE: foldingNet
-        relative_xyz = self.foldingnet(rebuild_feature).reshape(B, M, 3, -1)  # B M 3 S
+        )
+        rebuild_feature = self.reduce_map(rebuild_feature.reshape(B * M, -1))
+        relative_xyz = self.foldingnet(rebuild_feature).reshape(B, M, 3, -1)
         rebuild_points = (
-            (relative_xyz + coarse_point_cloud.unsqueeze(-1))
+            (relative_xyz + coarse_points.unsqueeze(-1))
             .transpose(2, 3)
             .reshape(B, -1, 3)
-        )  # B N 3
-
-        # NOTE: fc
-        # relative_xyz = self.refine(rebuild_feature)  # BM 3S
-        # rebuild_points = (relative_xyz.reshape(B,M,3,-1) + coarse_point_cloud.unsqueeze(-1)).transpose(2,3).reshape(B, -1, 3)
-
-        # cat the input
-        if self.gt_type == "full":
-            inp_sparse = fps(xyz, self.num_query)
-            coarse_point_cloud = torch.cat(
-                [coarse_point_cloud, inp_sparse], dim=1
-            ).contiguous()
-            rebuild_points = torch.cat([rebuild_points, xyz], dim=1).contiguous()
-        ret = (coarse_point_cloud, rebuild_points)
-
+        )
+        ret = (coarse_points, rebuild_points)
         return ret

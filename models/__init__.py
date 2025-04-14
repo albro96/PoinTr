@@ -7,3 +7,4 @@ import models.FoldingNet
 import models.SnowFlakeNet
 import models.AdaPoinTr
 import models.CRA_PCN
+import models.TST

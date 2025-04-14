@@ -20,11 +20,11 @@ from easydict import EasyDict
 sys.path.append("/storage/share/code/01_scripts/modules/")
 
 import ml_tools.metrics as ml_metrics
-from ml_tools.metrics import ToothMetrics
+from ml_tools.metrics import ToothMetrics, chamfer_distance_manual
 
 
 class Metrics(object):
-    __version__ = "0.2"
+    __version__ = "0.3"
     NO_OCCLUSION_VALUE = 100
     OCCLUSIONFUNCS = {
                     'OcclusionLoss': "cd_occlusion_loss",
@@ -165,41 +165,55 @@ class Metrics(object):
 
     @classmethod
     def _get_chamfer_distancel1(cls, pred, gt):
-        return chamfer_distance(pred, gt, norm=1)[0]
+        # return chamfer_distance(pred, gt, norm=1)[0]
+        return chamfer_distance_manual(pred, gt, norm=1, two_sided_reduction='mean', point_reduction='mean', single_directional=False, batch_reduction=None)
+
 
     @classmethod
     def _get_chamfer_distancel2(cls, pred, gt):
-        return chamfer_distance(pred, gt, norm=2)[0]
+        # return chamfer_distance(pred, gt, norm=2)[0]
+        return chamfer_distance_manual(pred, gt, norm=2, two_sided_reduction='mean', point_reduction='mean', single_directional=False, batch_reduction=None)
 
     @classmethod
-    def _get_info_chamfer_distancel2(cls, pred, gt, single_directional=False, point_reduction="mean", square=False):
+    def _get_info_chamfer_distancel2(cls, pred, gt, norm=2, single_directional=False, point_reduction="mean", square=False, tau=0.5, config=None, two_sided_reduction='mean'):
+
+        if config is not None:
+            tau = config.get("tau", tau)
+            point_reduction = config.get("point_reduction", point_reduction)
+            two_sided_reduction = config.get("two_sided_reduction", two_sided_reduction)
+            square = config.get("square", square)
+            
         assert point_reduction in ["mean", "sum"]
+        assert two_sided_reduction in [None, "mean"]
+
         red_fun = torch.mean if point_reduction == "mean" else torch.sum
 
-        chamfer_dist = chamfer_3DDist()
-        dist1, dist2, idx1, idx2 = chamfer_dist(pred, gt)
-        dist1 = torch.clamp(dist1, min=1e-9)
-        
-        d1 = torch.sqrt(dist1) if not square else dist1
-        distances1 = - torch.log(torch.exp(-0.5 * d1)/(torch.sum(torch.exp(-0.5 * d1) + 1e-7,dim=-1).unsqueeze(-1))**1e-7)
+        # chamfer_dist = chamfer_3DDist()
+        # dist1, dist2, idx1, idx2 = chamfer_dist(pred, gt)
+        dists = chamfer_distance_manual(pred, gt, norm=norm, two_sided_reduction=None, point_reduction=None, single_directional=single_directional, batch_reduction=None)
+
         if single_directional:
+            d1 = torch.clamp(dists, min=1e-9)
+            distances1 = - torch.log(torch.exp(-tau * d1)/(torch.sum(torch.exp(-tau * d1) + 1e-7,dim=-1).unsqueeze(-1))**1e-7)
             return red_fun(distances1) 
         else:
+            dist1, dist2 = dists
+
+            dist1 = torch.clamp(dist1, min=1e-9)
             dist2 = torch.clamp(dist2, min=1e-9)
+
+            d1 = torch.sqrt(dist1) if not square else dist1
             d2 = torch.sqrt(dist2) if not square else dist2
-            distances2 = - torch.log(torch.exp(-0.5 * d2)/(torch.sum(torch.exp(-0.5 * d2) + 1e-7,dim=-1).unsqueeze(-1))**1e-7)
-            return (red_fun(distances1) + red_fun(distances2)) / 2
 
-    # def calc_cd_one_side_like_InfoV2(p1, p2):
-    #     chamfer_dist = chamfer_3DDist()
-    #     dist1, dist2, idx1, idx2 = chamfer_dist(p1, p2)
-    #     dist1 = torch.clamp(dist1, min=1e-9)
-    #     dist2 = torch.clamp(dist2, min=1e-9)
-    #     d1 = torch.sqrt(dist1)
-    #     d2 = torch.sqrt(dist2)
+            distances1 = - torch.log(torch.exp(-tau * d1)/(torch.sum(torch.exp(-tau * d1) + 1e-7,dim=-1).unsqueeze(-1))**1e-7)
+            distances2 = - torch.log(torch.exp(-tau * d2)/(torch.sum(torch.exp(-tau * d2) + 1e-7,dim=-1).unsqueeze(-1))**1e-7)
 
-    #     distances1 = - torch.log(torch.exp(-0.5 * d1)/(torch.sum(torch.exp(-0.5 * d1) + 1e-7,dim=-1).unsqueeze(-1))**1e-7)
-    #     return torch.sum(distances1)
+        dist_red = red_fun(distances1) + red_fun(distances2)
+
+        if two_sided_reduction == 'mean':
+            dist_red /= 2
+
+        return dist_red
 
     @classmethod
     def _get_emd_distance(cls, pred, gt, eps=0.005, iterations=100):

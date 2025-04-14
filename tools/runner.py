@@ -20,7 +20,6 @@ from general_tools.format import format_duration
 
 # from ml_tools.metrics import get_occlusion_loss
 
-
 def calc_adaptive_weight(losses, config, args):
     geom_metrics = []
 
@@ -35,8 +34,8 @@ def calc_adaptive_weight(losses, config, args):
         mean_geom_loss = torch.mean(torch.tensor(geom_metrics))
         scores = torch.tensor(
             [
-                config.adaptive_loss_steepness * (config.adaptive_loss_thresh - mean_geom_loss),
-                config.adaptive_loss_steepness * (mean_geom_loss - config.adaptive_loss_thresh),
+                config.loss.adaptive_steepness * (config.loss.adaptive_thresh - mean_geom_loss),
+                config.loss.adaptive_steepness * (mean_geom_loss - config.loss.adaptive_thresh),
             ],
             device=args.device,
         )
@@ -60,9 +59,9 @@ def build_loss(base_model, partial, gt, config, antagonist=None, normalize=True,
 
     if config.model.NAME in ["AdaPoinTr", "PoinTr", "PCN"]:
         loss_func = None
-        if config.loss_cd_type == 'InfoCDL2':
+        if config.loss.cd_type == 'InfoCDL2':
             loss_func = Metrics._get_info_chamfer_distancel2
-        sparse_loss, dense_loss = base_model.module.get_loss(ret=ret, gt=gt, loss_func=loss_func)
+        sparse_loss, dense_loss = base_model.module.get_loss(ret=ret, gt=gt, loss_func=loss_func, config=config.loss)
 
     elif config.model.NAME == "CRAPCN":
         cd_loss, cra_losses = base_model.module.get_loss(
@@ -73,7 +72,7 @@ def build_loss(base_model, partial, gt, config, antagonist=None, normalize=True,
 
     if "SparseLoss" in config.loss_metrics:
         if config.model.NAME in ["AdaPoinTr", "PoinTr", "PCN"]:
-            _loss += sparse_loss * config.loss_coeffs.get("SparseLoss", 1.0)
+            _loss += sparse_loss * config.loss.coeffs.get("SparseLoss", 1.0)
             losses.SparseLoss = sparse_loss
 
         elif config.model.NAME == "CRAPCN":
@@ -84,12 +83,12 @@ def build_loss(base_model, partial, gt, config, antagonist=None, normalize=True,
                 losses.SparseLoss = cd_loss
                 losses.DenseLoss = cd_loss
             else:
-                _loss += sparse_loss * config.loss_coeffs.get("SparseLoss", 1.0)
+                _loss += sparse_loss * config.loss.coeffs.get("SparseLoss", 1.0)
                 losses.SparseLoss = sparse_loss
 
     if "DenseLoss" in config.loss_metrics:
         if config.model.NAME in ["AdaPoinTr", "PoinTr", "PCN"]:
-            _loss += dense_loss * config.loss_coeffs.get("DenseLoss", 1.0)
+            _loss += dense_loss * config.loss.coeffs.get("DenseLoss", 1.0)
             losses.DenseLoss = dense_loss
 
         elif config.model.NAME == "CRAPCN":
@@ -98,7 +97,7 @@ def build_loss(base_model, partial, gt, config, antagonist=None, normalize=True,
             ):
                 pass
             else:
-                _loss += dense_loss * config.loss_coeffs.get("DenseLoss", 1.0)
+                _loss += dense_loss * config.loss.coeffs.get("DenseLoss", 1.0)
                 losses.DenseLoss = dense_loss
 
     loss_metrics_filtered = [
@@ -117,9 +116,9 @@ def build_loss(base_model, partial, gt, config, antagonist=None, normalize=True,
         for metric in loss_metrics_filtered:
             losses[metric] = metrics[metric]
 
-            metric_loss = metrics[metric] * config.loss_coeffs.get(metric, 1.0)
+            metric_loss = metrics[metric] * config.loss.coeffs.get(metric, 1.0)
 
-            if config.adaptive_loss and metric in Metrics.OCCLUSIONFUNCS.keys():
+            if config.loss.adaptive and metric in Metrics.OCCLUSIONFUNCS.keys():
                 metric_loss *= occl_weight
             _loss += metric_loss
 
@@ -191,6 +190,8 @@ def run_net(args, config):
     # base_model.zero_grad()
     occl_weights = [0.0]
     window_size = 10
+
+    # metrics = validate(base_model, val_dataloader, start_epoch, args, config)
 
     for epoch in range(start_epoch, config.max_epoch + 1):
 
@@ -334,12 +335,9 @@ def run_net(args, config):
                         args,
                     )
 
-        if args.test_freq is not None and epoch % args.test_freq == 0:
-            metrics = test(base_model, test_dataloader, args, config, epoch=epoch)
-
         if args.save_checkpoints and not args.save_only_best and args.log_data:
             builder.save_checkpoint(
-                base_model, optimizer, epoch, metrics, best_metrics, "ckpt-last", args
+                base_model, optimizer, epoch, metrics, best_metrics, f"ckpt-last-{wandb.run.name}", args
             )
             # save every 100 epoch
             if epoch % 100 == 0:
@@ -364,13 +362,13 @@ def run_net(args, config):
                     args,
                 )
 
-        if config.adaptive_loss:
+        if config.loss.adaptive:
             occl_weights.append(calc_adaptive_weight(losses, config, args))
 
         if args.log_data:
             log_dict = EasyDict()
             log_dict.epoch = epoch
-            if config.adaptive_loss:
+            if config.loss.adaptive:
                 log_dict.occl_weight = occl_weight
             for idx, loss in enumerate(config.loss_metrics):
                 log_dict[f"train/{loss}"] = losses.avg()[idx]
@@ -397,7 +395,8 @@ def validate(base_model, val_dataloader, epoch, args, config, logger=None):
     # val_losses = AverageMeter(
     #     ["SparseLossL1", "SparseLossL2", "DenseLossL1", "DenseLossL2"]
     # )
-    val_metrics = AverageMeter(config.val_metrics)
+    # val_metrics = AverageMeter(config.val_metrics)
+    val_metrics = {metric: [] for metric in config.val_metrics}
 
     with torch.no_grad():
         for idx, data in enumerate(val_dataloader):
@@ -437,12 +436,12 @@ def validate(base_model, val_dataloader, epoch, args, config, logger=None):
                                 "points": dense_points[0].detach().cpu().numpy(),
                             }
                         ),
-                        f"val/pcd/coarse/{val_dataloader.dataset.tooth}": wandb.Object3D(
-                            {
-                                "type": "lidar/beta",
-                                "points": coarse_points[0].detach().cpu().numpy(),
-                            }
-                        ),
+                        # f"val/pcd/coarse/{val_dataloader.dataset.tooth}": wandb.Object3D(
+                        #     {
+                        #         "type": "lidar/beta",
+                        #         "points": coarse_points[0].detach().cpu().numpy(),
+                        #     }
+                        # ),
                         f"val/pcd/full-dense/{val_dataloader.dataset.tooth}": wandb.Object3D(
                             {
                                 "type": "lidar/beta",
@@ -455,12 +454,12 @@ def validate(base_model, val_dataloader, epoch, args, config, logger=None):
                                 "points": gt[0].detach().cpu().numpy(),
                             }
                         ),
-                        f"val/pcd/partial/{val_dataloader.dataset.tooth}": wandb.Object3D(
-                            {
-                                "type": "lidar/beta",
-                                "points": partial[0].detach().cpu().numpy(),
-                            }
-                        ),
+                        # f"val/pcd/partial/{val_dataloader.dataset.tooth}": wandb.Object3D(
+                        #     {
+                        #         "type": "lidar/beta",
+                        #         "points": partial[0].detach().cpu().numpy(),
+                        #     }
+                        # ),
                     },
                     step=epoch,
                 )
@@ -480,30 +479,41 @@ def validate(base_model, val_dataloader, epoch, args, config, logger=None):
             else:
                 for metric, value in _metrics.items():
                     _metrics[metric] = value.item()
-
-                # _metrics = [_metric.item() for _metric in _metrics]
             
+            for metric in val_metrics:
+                val_metrics[metric].append(_metrics[metric])
 
-            val_metrics.update(
-                [_metrics[val_metric] for val_metric in config.val_metrics]
-            )
 
         if args.distributed:
             torch.cuda.synchronize()
 
     print("============================ VAL RESULTS ============================")
     print(f"Epoch: {epoch}")
+    print('Metric: MEAN/MEDIAN')
     log_dict = {}  # {'val/epoch': epoch}
-    for metric, value in zip(val_metrics.items, val_metrics.avg()):
-        log_dict[f"val/{metric}"] = value
-        print(f"{metric}: {value:.6f}")
+
+    filter_arr = torch.tensor(val_metrics['ClusterPosLoss']) != args.no_occlusion_val
+    log_dict['val/num_success'] = torch.sum(filter_arr).item()
+    log_dict['val/num_failed'] = len(val_metrics['ClusterPosLoss']) - log_dict['val/num_success']
+    mean_val_metrics = []
+    print(f"Num success: {log_dict['val/num_success']}")
+    print(f"Num failed: {log_dict['val/num_failed']}")
+    for metric, values in val_metrics.items():
+        values = torch.tensor(values)
+        mean = torch.mean(values)
+        mean_val_metrics.append(mean)
+        median = torch.median(values)
+        log_dict[f"val/{metric}"] = mean
+        log_dict[f"val/{metric}-median"] = median
+        print(f"{metric}: {mean:.6f}/{median:.6f}")
+
 
     if args.log_data:
         wandb.log(log_dict, step=epoch)
 
     return Metrics(
         metric_name=config.consider_metric,
-        values=val_metrics.avg(),
+        values=mean_val_metrics,
         metrics=config.val_metrics,
     )
 
