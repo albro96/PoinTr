@@ -66,7 +66,7 @@ class Metrics(object):
             "eval_object": None,
             "is_greater_better": False,
             "init_value": 32767,
-        },
+        }
     ]
     ITEMS.extend(
         [
@@ -92,16 +92,16 @@ class Metrics(object):
         )
 
         _values = EasyDict()
-        # print(
-        #     f"Initialzing ToothMetrics with pred shape: {pred.shape}, gt shape: {gt.shape}, antagonist shape: {antagonist.shape}"
-        # )
+
         toothmetrics = ToothMetrics(
             recon=pred, gt=gt, antagonist=antagonist, requires_grad=requires_grad, clear_intermediate_results=True, no_occlusion_value=cls.NO_OCCLUSION_VALUE
         )
 
         for i, item in enumerate(_items):
             if item['name'] in cls.OCCLUSIONFUNCS.keys():
-                assert antagonist is not None
+                if item['name'] != 'InvIOULoss':
+                    assert antagonist is not None
+                    
                 _values[item["name"]] = toothmetrics.get(item["eval_func"])
             else:
                 eval_func = eval(item["eval_func"])

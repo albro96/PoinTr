@@ -17,8 +17,40 @@ import torch.autograd.profiler as profiler
 from torch.nn import functional as F
 sys.path.append("/storage/share/code/01_scripts/modules/")
 from general_tools.format import format_duration
-
+import math
 # from ml_tools.metrics import get_occlusion_loss
+
+def kld_weight(config, niter):
+    '''
+    compute the kld weight for VAE
+    '''
+    start = config.kldweight.start
+    target = config.kldweight.target
+    ntime = config.kldweight.ntime
+
+    _niter = niter - 10000
+    if _niter > ntime:
+        kld_weight = target
+    elif _niter < 0:
+        kld_weight = 0.
+    else:
+        kld_weight = target + (start - target) *  (1. + math.cos(math.pi * float(_niter) / ntime)) / 2.
+
+    return kld_weight
+
+def get_temp(config, niter):
+    if config.get('temp') is not None:
+        start = config.temp.start
+        target = config.temp.target
+        ntime = config.temp.ntime
+        if niter > ntime:
+            return target
+        else:
+            temp = target + (start - target) *  (1. + math.cos(math.pi * float(niter) / ntime)) / 2.
+            return temp
+    else:
+        return 0 
+    
 
 def calc_adaptive_weight(losses, config, args):
     geom_metrics = []
@@ -46,7 +78,8 @@ def calc_adaptive_weight(losses, config, args):
         ValueError("No occlusion losses in config")
 
 
-def build_loss(base_model, partial, gt, config, antagonist=None, normalize=True, occl_weight=None):
+
+def build_loss(base_model, partial, gt, config, antagonist=None, normalize=True, occl_weight=None, kwargs=None):
     losses = EasyDict()
     # create keys from losses_list
     for key in config.loss_metrics:
@@ -54,14 +87,23 @@ def build_loss(base_model, partial, gt, config, antagonist=None, normalize=True,
 
     _loss = 0
     # check if partial has nan
-    ret = base_model(partial)
-    recon = ret[-1]
-
-    if config.model.NAME in ["AdaPoinTr", "PoinTr", "PCN"]:
+    if 'base_model' in kwargs:
+        ret = base_model(partial, **kwargs['base_model'])
+    else:
+        ret = base_model(partial)
+    
+    if config.model.NAME in ["AdaPoinTr", "PoinTr", "PCN", "DiscreteVAE"]:
+        recon = ret[-1] 
         loss_func = None
         if config.loss.cd_type == 'InfoCDL2':
             loss_func = Metrics._get_info_chamfer_distancel2
-        sparse_loss, dense_loss = base_model.module.get_loss(ret=ret, gt=gt, loss_func=loss_func, config=config.loss)
+        if config.model.NAME == 'DiscreteVAE':
+            sparse_loss, dense_loss, klv_loss = base_model.module.get_loss(ret, gt)
+            if 'KLVLoss' in config.loss_metrics:
+                losses.KLVLoss = klv_loss
+                _loss += klv_loss * kwargs.loss.kld_weight * config.loss.coeffs.get("KLVLoss", 1.0)
+        else:
+            sparse_loss, dense_loss = base_model.module.get_loss(ret=ret, gt=gt, loss_func=loss_func, config=config.loss)
 
     elif config.model.NAME == "CRAPCN":
         cd_loss, cra_losses = base_model.module.get_loss(
@@ -71,7 +113,7 @@ def build_loss(base_model, partial, gt, config, antagonist=None, normalize=True,
         dense_loss = cra_losses[-1]
 
     if "SparseLoss" in config.loss_metrics:
-        if config.model.NAME in ["AdaPoinTr", "PoinTr", "PCN"]:
+        if config.model.NAME in ["AdaPoinTr", "PoinTr", "PCN", 'DiscreteVAE']:
             _loss += sparse_loss * config.loss.coeffs.get("SparseLoss", 1.0)
             losses.SparseLoss = sparse_loss
 
@@ -87,7 +129,7 @@ def build_loss(base_model, partial, gt, config, antagonist=None, normalize=True,
                 losses.SparseLoss = sparse_loss
 
     if "DenseLoss" in config.loss_metrics:
-        if config.model.NAME in ["AdaPoinTr", "PoinTr", "PCN"]:
+        if config.model.NAME in ["AdaPoinTr", "PoinTr", "PCN", 'DiscreteVAE']:
             _loss += dense_loss * config.loss.coeffs.get("DenseLoss", 1.0)
             losses.DenseLoss = dense_loss
 
@@ -127,12 +169,13 @@ def build_loss(base_model, partial, gt, config, antagonist=None, normalize=True,
 
 def run_net(args, config):
     # build dataset
+
     train_sampler, train_dataloader = builder.dataset_builder(
-        args, config.dataset, mode="train", bs=config.bs
+        args, config, mode="train", bs=config.bs
     )
-    _, val_dataloader = builder.dataset_builder(args, config.dataset, mode="val", bs=1)
+    _, val_dataloader = builder.dataset_builder(args, config, mode="val", bs=1)
     _, test_dataloader = builder.dataset_builder(
-        args, config.dataset, mode="test", bs=1
+        args, config, mode="test", bs=1
     )
 
     # build model
@@ -161,7 +204,7 @@ def run_net(args, config):
         base_model = nn.parallel.DistributedDataParallel(
             base_model,
             device_ids=[args.local_rank % torch.cuda.device_count()],
-            find_unused_parameters=True,
+            find_unused_parameters=False,
         )
         print("Using Distributed Data parallel ...")
     else:  # elif args.num_gpus > 1:
@@ -173,6 +216,7 @@ def run_net(args, config):
 
     if args.resume:
         builder.resume_optimizer(optimizer, args)
+
     scheduler = builder.build_scheduler(
         base_model,
         optimizer,
@@ -180,11 +224,10 @@ def run_net(args, config):
         last_epoch=-1 if start_epoch == 1 else start_epoch - 1,
     )
 
-    if args.log_data:
+# Before watching the model, do:
+    if args.log_data and (not args.distributed or args.local_rank == 0):
         wandb.watch(base_model)
 
-    # trainval
-    # training
     epoch_time_list = []
 
     # base_model.zero_grad()
@@ -216,31 +259,41 @@ def run_net(args, config):
 
         num_iter = 0
 
-        # base_model.train()  # set model to training mode
         n_batches = len(train_dataloader)
 
         # with profiler.profile(record_shapes=True, use_cuda=True) as prof:
         for idx, data in enumerate(train_dataloader):
 
             optimizer.zero_grad()
-            # print(train_dataloader.dataset.patient, train_dataloader.dataset.tooth)
             data_time.update(time.time() - batch_start_time)
-            # npoints = config.dataset.train._base_.N_POINTS
-            # dataset_name = config.dataset.train._base_.NAME
 
-            if config.dataset.return_normals:
-                partial = data[0][:, 0].to(args.device)
-                gt = data[1][:, 0].to(args.device)
-            else:
-                partial = data[0].to(args.device)
-                gt = data[1].to(args.device)
-
-            if config.dataset.return_antagonist:
-                antagonist = data[-1].to(args.device)
-            else:
-                antagonist = None
+            if config.datasettype == 'TeethSegDataset':
+                if config.dataset.return_normals:
+                    partial = data[0][:, 0].to(args.device)
+                    gt = data[1][:, 0].to(args.device)
+                else:
+                    partial = data[0].to(args.device)
+                    gt = data[1].to(args.device)
+                if config.dataset.return_antagonist:
+                    antagonist = data[-1].to(args.device)
+                else:
+                    antagonist = None
+            elif config.datasettype == 'SingleToothDataset':
+                partial = data.to(args.device)
+                gt=partial
+                antagonist=None
 
             num_iter += 1
+
+            if config.model_name in ['DiscreteVAE']:      
+                kwargs = EasyDict({'base_model':{
+                    'temperature': get_temp(config, num_iter),
+                    'hard': False
+                    },
+                    'loss': {
+                        'kld_weight': kld_weight(config, num_iter)
+                    }
+                })
 
             with torch.cuda.amp.autocast(enabled=args.use_amp_autocast):
                 _loss, losses_batch = build_loss(
@@ -250,13 +303,13 @@ def run_net(args, config):
                     config=config,
                     antagonist=antagonist,
                     occl_weight=occl_weight,
+                    kwargs=kwargs,
                 )
 
             _loss.backward()
 
             # forward
             if num_iter == config.step_per_update:
-
                 torch.nn.utils.clip_grad_norm_(
                     base_model.parameters(),
                     max_norm=getattr(config, "grad_norm_clip", 0),
@@ -301,71 +354,73 @@ def run_net(args, config):
 
         # print(prof.key_averages().table(sort_by="cuda_time_total"))
 
-        if args.sweep and args.log_data:
-            print(
+        if args.sweep and args.log_data and (not args.distributed or args.local_rank == 0):
+           print(
                 f'\rAgent: {wandb.run.id} Epoch [{epoch}/{config.max_epoch}] Losses = {[f"{l:.4f}"  for l in losses.val()]} lr = {optimizer.param_groups[0]["lr"]:.6f}'
             )
 
         if config.scheduler.type == "GradualWarmup":
             if n_itr < config.scheduler.kwargs_2.total_epoch:
-                scheduler.step()
-
-        if isinstance(scheduler, list):
-            for item in scheduler:
-                item.step()
-        else:
-            scheduler.step()
+                scheduler.step(epoch)
+        if config.scheduler.type != 'function':
+            if isinstance(scheduler, list):
+                for item in scheduler:
+                    item.step(epoch)
+            else:
+                scheduler.step(epoch)
         epoch_end_time = time.time()
 
-        if epoch % args.val_freq == 0:
-            # Validate the current model
-            metrics = validate(base_model, val_dataloader, epoch, args, config)
+        if not args.distributed or args.local_rank == 0:
+            if epoch % args.val_freq == 0:
+                # Validate the current model
+                metrics = validate(base_model, val_dataloader, epoch, args, config)
 
-            # Save ckeckpoints
-            if metrics.better_than(best_metrics):
-                best_metrics = metrics
-                if args.save_checkpoints and args.log_data:
+                # Save ckeckpoints
+                if metrics.better_than(best_metrics):
+                    best_metrics = metrics
+                    if args.save_checkpoints and args.log_data:
+                        builder.save_checkpoint(
+                            base_model,
+                            optimizer,
+                            epoch,
+                            metrics,
+                            best_metrics,
+                            f"ckpt-best-{wandb.run.name}",
+                            args,
+                        )
+
+            if args.save_checkpoints and not args.save_only_best and args.log_data:
+                builder.save_checkpoint(
+                    base_model, optimizer, epoch, metrics, best_metrics, f"ckpt-last-{wandb.run.name}", args
+                )
+                # save every 100 epoch
+                if epoch % 100 == 0:
                     builder.save_checkpoint(
                         base_model,
                         optimizer,
                         epoch,
                         metrics,
                         best_metrics,
-                        f"ckpt-best-{wandb.run.name}",
+                        f"ckpt-epoch-{epoch:03d}-{wandb.run.name}",
                         args,
                     )
 
-        if args.save_checkpoints and not args.save_only_best and args.log_data:
-            builder.save_checkpoint(
-                base_model, optimizer, epoch, metrics, best_metrics, f"ckpt-last-{wandb.run.name}", args
-            )
-            # save every 100 epoch
-            if epoch % 100 == 0:
-                builder.save_checkpoint(
-                    base_model,
-                    optimizer,
-                    epoch,
-                    metrics,
-                    best_metrics,
-                    f"ckpt-epoch-{epoch:03d}-{wandb.run.name}",
-                    args,
-                )
-
-            if (config.max_epoch - epoch) < 2:
-                builder.save_checkpoint(
-                    base_model,
-                    optimizer,
-                    epoch,
-                    metrics,
-                    best_metrics,
-                    f"ckpt-epoch-{epoch:03d}-{wandb.run.name}",
-                    args,
-                )
+                if (config.max_epoch - epoch) < 2:
+                    builder.save_checkpoint(
+                        base_model,
+                        optimizer,
+                        epoch,
+                        metrics,
+                        best_metrics,
+                        f"ckpt-epoch-{epoch:03d}-{wandb.run.name}",
+                        args,
+                    )
 
         if config.loss.adaptive:
             occl_weights.append(calc_adaptive_weight(losses, config, args))
 
-        if args.log_data:
+# After training an epoch, log metrics only on master.
+        if args.log_data and (not args.distributed or args.local_rank == 0):
             log_dict = EasyDict()
             log_dict.epoch = epoch
             if config.loss.adaptive:
@@ -389,34 +444,43 @@ def run_net(args, config):
 
 
 def validate(base_model, val_dataloader, epoch, args, config, logger=None):
-    # print(f"\n[VALIDATION] Start validating epoch {epoch}")
     base_model.eval()  # set model to eval mode
 
-    # val_losses = AverageMeter(
-    #     ["SparseLossL1", "SparseLossL2", "DenseLossL1", "DenseLossL2"]
-    # )
-    # val_metrics = AverageMeter(config.val_metrics)
     val_metrics = {metric: [] for metric in config.val_metrics}
+    if config.model.NAME in ['DiscreteVAE']:
+        kwargs = EasyDict({'base_model':{
+                        'hard': True,
+                        }
+                    })
+    else:
+        kwargs = EasyDict()
 
     with torch.no_grad():
         for idx, data in enumerate(val_dataloader):
+            if config.datasettype == 'TeethSegDataset':
+                if config.dataset.return_normals:
+                    partial = data[0][:, 0].to(args.device)
+                    gt = data[1][:, 0].to(args.device)
+                else:
+                    partial = data[0].to(args.device)
+                    gt = data[1].to(args.device)
 
-            if config.dataset.return_normals:
-                partial = data[0][:, 0].to(args.device)
-                gt = data[1][:, 0].to(args.device)
-            else:
-                partial = data[0].to(args.device)
-                gt = data[1].to(args.device)
-
-            if config.dataset.return_antagonist:
-                antagonist = data[-1].to(args.device)
-            else:
-                antagonist = None
+                if config.dataset.return_antagonist:
+                    antagonist = data[-1].to(args.device)
+                else:
+                    antagonist = None
+            elif config.datasettype == 'SingleToothDataset':
+                partial = data.to(args.device)
+                gt=partial
+                antagonist=None
 
             with torch.cuda.amp.autocast(enabled=args.use_amp_autocast):
-                ret = base_model(partial)
+                if 'base_model' in kwargs:
+                    ret = base_model(partial, **kwargs['base_model'])
+                else:
+                    ret = base_model(partial)
 
-            coarse_points = ret[0]
+            coarse_points = ret[-2]
             dense_points = ret[-1]
 
             if (
@@ -442,12 +506,12 @@ def validate(base_model, val_dataloader, epoch, args, config, logger=None):
                         #         "points": coarse_points[0].detach().cpu().numpy(),
                         #     }
                         # ),
-                        f"val/pcd/full-dense/{val_dataloader.dataset.tooth}": wandb.Object3D(
-                            {
-                                "type": "lidar/beta",
-                                "points": full_dense[0].detach().cpu().numpy(),
-                            }
-                        ),
+                        # f"val/pcd/full-dense/{val_dataloader.dataset.tooth}": wandb.Object3D(
+                        #     {
+                        #         "type": "lidar/beta",
+                        #         "points": full_dense[0].detach().cpu().numpy(),
+                        #     }
+                        # ),
                         f"val/pcd/gt/{val_dataloader.dataset.tooth}": wandb.Object3D(
                             {
                                 "type": "lidar/beta",
@@ -473,31 +537,34 @@ def validate(base_model, val_dataloader, epoch, args, config, logger=None):
                 requires_grad=False,
             )
 
-            if args.distributed:
-                for metric, value in _metrics.items():
-                    _metrics[metric] = dist_utils.reduce_tensor(value, args).item()
-            else:
-                for metric, value in _metrics.items():
-                    _metrics[metric] = value.item()
+            # val_dataloader was set to non distributed
+            # if args.distributed:
+            #     for metric, value in _metrics.items():
+            #         _metrics[metric] = dist_utils.reduce_tensor(value, args).item()
+            # else:
+            for metric, value in _metrics.items():
+                _metrics[metric] = value.item()
             
             for metric in val_metrics:
                 val_metrics[metric].append(_metrics[metric])
 
 
-        if args.distributed:
-            torch.cuda.synchronize()
+        # if args.distributed:
+        #     torch.cuda.synchronize()
 
     print("============================ VAL RESULTS ============================")
     print(f"Epoch: {epoch}")
     print('Metric: MEAN/MEDIAN')
     log_dict = {}  # {'val/epoch': epoch}
 
-    filter_arr = torch.tensor(val_metrics['ClusterPosLoss']) != args.no_occlusion_val
-    log_dict['val/num_success'] = torch.sum(filter_arr).item()
-    log_dict['val/num_failed'] = len(val_metrics['ClusterPosLoss']) - log_dict['val/num_success']
+    if any(metric in val_metrics for metric in config.occlusion_metrics):
+        filter_arr = torch.tensor(val_metrics['ClusterPosLoss']) != args.no_occlusion_val
+        log_dict['val/num_success'] = torch.sum(filter_arr).item()
+        log_dict['val/num_failed'] = len(val_metrics['ClusterPosLoss']) - log_dict['val/num_success']
+        print(f"Num success: {log_dict['val/num_success']}")
+        print(f"Num failed: {log_dict['val/num_failed']}")
+
     mean_val_metrics = []
-    print(f"Num success: {log_dict['val/num_success']}")
-    print(f"Num failed: {log_dict['val/num_failed']}")
     for metric, values in val_metrics.items():
         values = torch.tensor(values)
         mean = torch.mean(values)
@@ -507,7 +574,6 @@ def validate(base_model, val_dataloader, epoch, args, config, logger=None):
         log_dict[f"val/{metric}-median"] = median
         print(f"{metric}: {mean:.6f}/{median:.6f}")
 
-
     if args.log_data:
         wandb.log(log_dict, step=epoch)
 
@@ -516,27 +582,6 @@ def validate(base_model, val_dataloader, epoch, args, config, logger=None):
         values=mean_val_metrics,
         metrics=config.val_metrics,
     )
-
-
-crop_ratio = {"easy": 1 / 4, "median": 1 / 2, "hard": 3 / 4}
-
-
-# def test_net(args, config):
-#     # logger = get_logger(args.log_name)
-#     print("Tester start ... ")
-#     _, test_dataloader = builder.dataset_builder(args, config.dataset, mode="test", bs=1)
-
-#     base_model = builder.model_builder(config.model)
-#     # load checkpoints
-#     builder.load_model(base_model, args.ckpt_path)
-#     if args.use_gpu:
-#         base_model.to(args.local_rank)
-
-#     #  DDP
-#     if args.distributed:
-#         raise NotImplementedError()
-
-#     test(base_model, test_dataloader, args, config)
 
 def test_net(args, config):
     import trimesh
@@ -653,26 +698,42 @@ def test(base_model, test_dataloader, args, config):
 
     test_metrics = {metric: [] for metric in config.val_metrics}
 
+    if config.model.NAME in ['DiscreteVAE']:
+        kwargs = EasyDict({'base_model':{
+                        'hard': True,
+                        }
+                    })
+    else:
+        kwargs = EasyDict()
+
 
     with torch.no_grad():
         for idx, data in tqdm(enumerate(test_dataloader)):
 
-            if config.dataset.return_normals:
-                partial = data[0][:, 0].to(args.device)
-                gt = data[1][:, 0].to(args.device)
-            else:
-                partial = data[0].to(args.device)
-                gt = data[1].to(args.device)
+            if config.datasettype == 'TeethSegDataset':
+                if config.dataset.return_normals:
+                    partial = data[0][:, 0].to(args.device)
+                    gt = data[1][:, 0].to(args.device)
+                else:
+                    partial = data[0].to(args.device)
+                    gt = data[1].to(args.device)
 
-            if config.dataset.return_antagonist:
-                antagonist = data[-1].to(args.device)
-            else:
-                antagonist = None
+                if config.dataset.return_antagonist:
+                    antagonist = data[-1].to(args.device)
+                else:
+                    antagonist = None
+            elif config.datasettype == 'SingleToothDataset':
+                partial = data.to(args.device)
+                gt=partial
+                antagonist=None
 
             with torch.cuda.amp.autocast(enabled=args.use_amp_autocast):
-                ret = base_model(partial)
+                if 'base_model' in kwargs:
+                    ret = base_model(partial, **kwargs['base_model'])
+                else:
+                    ret = base_model(partial)
 
-            coarse_points = ret[0]
+            coarse_points = ret[-2]
             dense_points = ret[-1]
 
             if args.log_data:
@@ -686,8 +747,9 @@ def test(base_model, test_dataloader, args, config):
                 os.makedirs(save_dir, exist_ok=True)
                 torch_to_o3d(dense_points, os.path.join(save_dir, f'{idx:02d}_dense.pcd'))
                 torch_to_o3d(partial, os.path.join(save_dir, f'{idx:02d}_partial.pcd'))
-                torch_to_o3d(gt, os.path.join(save_dir, f'{idx:02d}_gt.pcd'))
-                torch_to_o3d(antagonist, os.path.join(save_dir, f'{idx:02d}_anta.pcd'))
+                if not config.model.NAME in ['DiscreteVAE']:
+                    torch_to_o3d(gt, os.path.join(save_dir, f'{idx:02d}_gt.pcd'))
+                    torch_to_o3d(antagonist, os.path.join(save_dir, f'{idx:02d}_anta.pcd'))
                 
             _metrics = Metrics.get(
                 pred=dense_points,
@@ -698,20 +760,12 @@ def test(base_model, test_dataloader, args, config):
                 requires_grad=False,
             )
 
-            if args.distributed:
-                for metric, value in _metrics.items():
-                    _metrics[metric] = dist_utils.reduce_tensor(value, args).item()
-            else:
-                for metric, value in _metrics.items():
-                    _metrics[metric] = value.item()
-            
+            for metric, value in _metrics.items():
+                _metrics[metric] = value.item()
+        
 
             for metric in test_metrics:
                 test_metrics[metric].append(_metrics[metric])
-
-
-        if args.distributed:
-            torch.cuda.synchronize()
 
     print("============================ TEST RESULTS ============================")
     if args.log_testdata:
@@ -722,11 +776,16 @@ def test(base_model, test_dataloader, args, config):
             pickle.dump(test_metrics, f)
         # calc mean, median, etc and save to json
         metrics_dict = EasyDict({'all': {}, 'cleaned': {}})
-        filter_arr = torch.tensor(test_metrics['ClusterPosLoss']) != args.no_occlusion_val
-        metrics_dict['all']['num_success'] = torch.sum(filter_arr).item()
-        metrics_dict['all']['num_failed'] = len(test_metrics['ClusterPosLoss']) - metrics_dict['all']['num_success']
+        filter_arr = None
+        if any(metric in test_metrics for metric in config.occlusion_metrics):
+            filter_arr = torch.tensor(test_metrics['ClusterPosLoss']) != args.no_occlusion_val
+            metrics_dict['all']['num_success'] = torch.sum(filter_arr).item()
+            metrics_dict['all']['num_failed'] = len(test_metrics['ClusterPosLoss']) - metrics_dict['all']['num_success']
 
         for calctype in ['all', 'cleaned']:
+            if filter_arr is None:
+                continue
+            
             for metric, value in test_metrics.items():
                 value = torch.tensor(value)
                 if calctype == 'cleaned':

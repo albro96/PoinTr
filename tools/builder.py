@@ -18,13 +18,14 @@ sys.path.append("/storage/share/code/01_scripts/modules/")
 
 
 def dataset_builder(args, config, mode, bs):
-    # if config.return_antagonist or config.tooth_range.jaw == "full":
-    #     from datasets.TeethSegDataset import TeethSegDataset_Normals as TeethSegDataset
-    # else:
-    from datasets.TeethSegDataset import TeethSegDataset
+    if config.datasettype == 'SingleToothDataset':
+        from datasets.SingleToothDataset import SingleToothDataset as Dataset
+    elif config.datasettype == 'TeethSegDataset':
+        from datasets.TeethSegDataset import TeethSegDataset as Dataset
+    elif config.datasettype == 'TSTDataset':
+        from datasets.TSTDataset import TSTDataset as Dataset
 
-    # dataset = build_dataset_from_cfg(config)
-    dataset = TeethSegDataset(**config, mode=mode, device=args.device)
+    dataset = Dataset(**config.dataset, mode=mode, device=args.device)
 
     shuffle = mode == "train"
     drop_last = mode == "train"
@@ -34,7 +35,8 @@ def dataset_builder(args, config, mode, bs):
     else:
         num_workers = int(args.num_workers)
 
-    if args.distributed:
+    # only for distributed training, not for val/test
+    if args.distributed and mode == "train":
         sampler = torch.utils.data.distributed.DistributedSampler(
             dataset, shuffle=shuffle
         )
@@ -78,7 +80,7 @@ def build_optimizer(base_model, config):
             for name, param in model.module.named_parameters():
                 if not param.requires_grad:
                     continue  # frozen weights
-                if len(param.shape) == 1 or name.endswith(".bias") or name in skip_list:
+                if len(param.shape) == 1 or name.endswith(".bias") or 'token' in name or name in skip_list: # added or token in name from pointbert
                     no_decay.append(param)
                 else:
                     decay.append(param)
@@ -130,8 +132,11 @@ def build_scheduler(base_model, optimizer, config, last_epoch=-1):
             t_initial=sche_config.kwargs.t_max,
             lr_min=sche_config.kwargs.min_lr,
             warmup_t=sche_config.kwargs.initial_epochs,
+            warmup_lr_init=sche_config.kwargs.warmup_lr_init,
             t_in_epochs=True,
         )
+    elif sche_config.type == 'function': # from pointbert
+        scheduler = None
     else:
         raise NotImplementedError()
 

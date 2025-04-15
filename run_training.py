@@ -92,7 +92,7 @@ def main(rank=0, world_size=1):
             "gt_partial_saved": False,
             'no_occlusion_val': 100,
             "test": False,
-            "log_data": False,  # if true: wandb logger on and save ckpts to local drive
+            "log_data": True,  # if true: wandb logger on and save ckpts to local drive
         }
     )
 
@@ -101,8 +101,9 @@ def main(rank=0, world_size=1):
         'loss': {
                 'cd_type': 'CDL2', # 'CDL2', 'InfoCDL2'
                 "active_metrics": {
-                    "SparseLoss": False,
+                    "SparseLoss": True,
                     "DenseLoss": True,
+                    'KLVLoss': True,
                     "OcclusionLoss": False,
                     "ClusterDistLoss": False,
                     "ClusterNumLoss": False,
@@ -112,6 +113,7 @@ def main(rank=0, world_size=1):
                 "coeffs": {
                     "SparseLoss": 1.0,
                     "DenseLoss": 1.0,
+                    'KLVLoss': 1.0,
                     "OcclusionLoss": 1.0,
                     "ClusterDistLoss": 1.0,
                     "ClusterPosLoss": 1.0,
@@ -156,23 +158,25 @@ def main(rank=0, world_size=1):
             "model": {
                 "gt_type": data_config.gt_type,
             },
-            "max_epoch": 500,
-            "consider_metric": "CDL2",  # "CDL2",
             "val_metrics": [
                 "CDL1",
                 "CDL2",
-                "F-Score",
-                "OcclusionLoss",
-                "ClusterDistLoss",
-                "ClusterNumLoss",
-                "ClusterPosLoss",
-                "PenetrationLoss",
+                # "F-Score",
+                # "OcclusionLoss",
+                # "ClusterDistLoss",
+                # "ClusterNumLoss",
+                # "ClusterPosLoss",
+                # "PenetrationLoss",
                 "InvIOULoss",
             ],
-            "total_bs": int(3 * world_size),  # CRAPCN: int(30*world_size),
+            "occlusion_metrics": ['OcclusionLoss', 'ClusterDistLoss', 'ClusterNumLoss', 'ClusterPosLoss', 'PenetrationLoss'],
+            "total_bs": int(256 * world_size),  # CRAPCN: int(30*world_size),
             "step_per_update": 1,
             "grad_norm_clip": 5,
-            "model_name": "PoinTr",  # "PoinTr", 'CRAPCN'
+            "model_name": "DiscreteVAE",  # "DiscreteVAE" "PoinTr", 'CRAPCN'
+            'datasettype': 'TeethSegDataset', # TSTDataset
+            "max_epoch": 500,
+            "consider_metric": "CDL2",  # "CDL2",
         }
     )
 
@@ -236,6 +240,59 @@ def main(rank=0, world_size=1):
             },
         },
     }
+
+    network_config_dict.DiscreteVAE = {
+        "model": {
+        "NAME": "DiscreteVAE",
+        "group_size": 32,
+        "num_group": 64,
+        "encoder_dims": 256,
+        "num_tokens": 8192,
+        "tokens_dims": 256,
+        "decoder_dims": 256
+        },
+        'bnmscheduler': None,
+        "scheduler": {
+            "type": "CosLR",
+            "kwargs": {
+                "t_max": 500, # former epochs
+                "initial_epochs": 10,
+                "warmup_lr_init": 1e-5,
+                'min_lr': 0.00001,
+            }
+            },
+        "temp": {
+        "start": 1,
+        "target": 0.0625,
+        "ntime": 100000
+        },
+        "kldweight": {
+            "start": 0,
+            "target": 0.1,
+            "ntime": 100000
+        },   
+        # 'loss_metrics': ['Loss1', 'Loss2'],
+        'datasettype': 'SingleToothDataset',
+        'dataset':{
+            "num_points": 2048,
+            "tooth_range": {
+                "teeth": 'full', 
+                "jaw": "full",
+                "quadrants": "all",
+            },
+            "data_type": "npy",
+            "use_fixed_split": True,
+            "enable_cache": True,
+            "create_cache_file": True,
+            "overwrite_cache_file": False,
+            "return_normals": False, 
+            "dataset": "orthodental",
+            "data_dir": None,
+            "datahash": "15c02eb0",
+            'normalize_mean': True,
+            'normalize_pose': False,
+            'normalize_scale': False,
+        }}
 
     network_config_dict.PoinTr = {
         "model": {
@@ -321,51 +378,57 @@ def main(rank=0, world_size=1):
         test_net(args, config)
         return
     
-    wandb_config = None
+    if args.local_rank == 0:
+        wandb_config = None
 
-    if args.log_data:
-        wandb.init(
-            # set the wandb project where this run will be logged, dont set config here, else sweep will fail
-            project="ToothRecon",
-            save_code=True,
-        )
+        if args.log_data:
+            
+            wandb.init(
+                # set the wandb project where this run will be logged, dont set config here, else sweep will fail
+                project="ToothRecon",
+                save_code=True,
+            )
 
-        # define custom x axis metric
-        wandb.define_metric("epoch")
+            # define custom x axis metric
+            wandb.define_metric("epoch")
 
-        # set all other train/ metrics to use this step
-        wandb.define_metric("train/*", step_metric="epoch")
-        wandb.define_metric("val/*", step_metric="epoch")
-        wandb.define_metric("test/*", step_metric="epoch")
+            # set all other train/ metrics to use this step
+            wandb.define_metric("train/*", step_metric="epoch")
+            wandb.define_metric("val/*", step_metric="epoch")
+            wandb.define_metric("test/*", step_metric="epoch")
 
-        wandb.define_metric("val/pcd/dense/*", step_metric="epoch")
-        wandb.define_metric("val/pcd/full-dense/*", step_metric="epoch")
-        wandb.define_metric("val/pcd/gt/*", step_metric="epoch")
+            wandb.define_metric("val/pcd/dense/*", step_metric="epoch")
+            wandb.define_metric("val/pcd/full-dense/*", step_metric="epoch")
+            wandb.define_metric("val/pcd/gt/*", step_metric="epoch")
 
-        # If called by wandb.agent, as below,
-        # this config will be set by Sweep Controller
-        wandb_config = wandb.config
+            # If called by wandb.agent, as below,
+            # this config will be set by Sweep Controller
+            wandb_config = wandb.config
 
-        # update the model config with wandb config
-        for key, value in wandb_config.items():
-            if "." in key:
-                keys = key.split(".")
-                config_temp = config
-                for sub_key in keys[:-1]:
-                    config_temp = config_temp.setdefault(sub_key, {})
-                config_temp[keys[-1]] = value
-            else:
-                config[key] = value
+            # update the model config with wandb config
+            for key, value in wandb_config.items():
+                if "." in key:
+                    keys = key.split(".")
+                    config_temp = config
+                    for sub_key in keys[:-1]:
+                        config_temp = config_temp.setdefault(sub_key, {})
+                    config_temp[keys[-1]] = value
+                else:
+                    config[key] = value
 
-    config.model.update(network_config_dict[config.model_name].model)
+        if wandb_config is not None:
+            args.sweep = True if "sweep" in wandb_config else False
+        else:
+            args.sweep = False
+    else:
+        args.sweep = False
+        os.environ["WANDB_MODE"] = "disabled"
+
+    # config.model.update(network_config_dict[config.model_name].model)
+    config.update(network_config_dict[config.model_name])
 
     if config.model.NAME == "AdaPoinTr":
         config.model.dense_loss_coeff = config.dense_loss_coeff
-
-    if wandb_config is not None:
-        args.sweep = True if "sweep" in wandb_config else False
-    else:
-        args.sweep = False
 
     args.log_data = args.sweep or args.log_data
 
@@ -376,7 +439,7 @@ def main(rank=0, world_size=1):
             args.experiment_path, "sweep", config.sweepname
         )
 
-    if args.log_data and not args.test:
+    if args.log_data and not args.test and args.local_rank == 0:
         if not os.path.exists(args.experiment_path):
             os.makedirs(args.experiment_path, exist_ok=True)
             print("Create experiment path successfully at %s" % args.experiment_path)
@@ -402,20 +465,19 @@ def main(rank=0, world_size=1):
     else:
         config.bs = config.total_bs
 
-    if config.dataset.num_points_corr > 16384:
+    if config.dataset.get("num_points_corr",0) > 16384:
         print('\nBATCH SIZE\nBatch size set to 1 due to large number of points\n')
         config.bs = 1
 
     config['loss_metrics'] = [key for key, value in config.loss.active_metrics.items() if value]
 
-    occlusion_metrics = ['OcclusionLoss', 'ClusterDistLoss', 'ClusterNumLoss', 'ClusterPosLoss', 'PenetrationLoss']
     if config.consider_metric not in config.val_metrics: # or (config.loss.adaptive and not any([metric in config.loss_metrics for metric in occlusion_metrics])):
         print('Invalid Config')
         raise ValueError('Invalid Config')
 
-    config.loss.adaptive = config.loss.adaptive and any([metric in config.loss_metrics for metric in occlusion_metrics])
+    config.loss.adaptive = config.loss.adaptive and any([metric in config.loss_metrics for metric in config.occlusion_metrics])
 
-    if args.log_data:
+    if args.log_data and args.local_rank == 0:
         # update wandb config
         wandb.config.update(config, allow_val_change=True)
 
@@ -431,7 +493,7 @@ def main(rank=0, world_size=1):
 if __name__ == "__main__":
 
     # User Input
-    num_gpus = 1  # number of gpus, dont use 3
+    num_gpus = 4  # number of gpus, dont use 3
     print("Number of GPUs: ", num_gpus)
 
     if num_gpus > 1:
