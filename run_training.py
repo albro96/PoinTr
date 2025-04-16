@@ -55,7 +55,7 @@ def main(rank=0, world_size=1):
             "gt_partial_saved": False,
             'no_occlusion_val': 100,
             "test": False,
-            "log_data": False,  # if true: wandb logger on and save ckpts to local drive
+            "log_data": True,  # if true: wandb logger on and save ckpts to local drive
         }
     )
 

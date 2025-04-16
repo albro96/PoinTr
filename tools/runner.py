@@ -209,14 +209,17 @@ def run_net(args, config):
         print("Using Distributed Data parallel ...")
     else:  # elif args.num_gpus > 1:
         print("Using Data parallel ...")
+        print('Loading model to device ...')
         base_model = nn.DataParallel(base_model).to(args.device)
 
     # optimizer & scheduler
+    print("Building optimizer ...")
     optimizer = builder.build_optimizer(base_model, config)
 
     if args.resume:
         builder.resume_optimizer(optimizer, args)
 
+    print("Building scheduler ...")
     scheduler = builder.build_scheduler(
         base_model,
         optimizer,
@@ -234,7 +237,7 @@ def run_net(args, config):
     occl_weights = [0.0]
     window_size = 10
 
-    metrics = validate(base_model, val_dataloader, start_epoch, args, config)
+    # metrics = validate(base_model, val_dataloader, start_epoch, args, config)
 
     for epoch in range(start_epoch, config.max_epoch + 1):
 
@@ -482,6 +485,7 @@ def validate(base_model, val_dataloader, epoch, args, config, logger=None):
                 partial = data[0].to(args.device)
                 gt=partial # .reshape(1,-1,3).contiguous()
                 antagonist=None
+                corr_mask = data[2].to(args.device)
 
             with torch.cuda.amp.autocast(enabled=args.use_amp_autocast):
                 if 'base_model' in kwargs:
@@ -493,9 +497,10 @@ def validate(base_model, val_dataloader, epoch, args, config, logger=None):
             dense_points = ret[-1]
 
             if config.model.NAME in [ "DiscreteVAE"] and config.model.sequence_input:
-                dense_points.squeeze_(0)
-                coarse_points.squeeze_(0)
-                gt.squeeze_(0)
+                # only use nonzero elements in the sequence
+                dense_points = dense_points[corr_mask].squeeze(0)
+                coarse_points = coarse_points[corr_mask].squeeze(0)
+                gt = gt[corr_mask].squeeze(0)
 
             if (
                 val_dataloader.dataset.patient == "0U1LI1CB"
@@ -546,15 +551,13 @@ def validate(base_model, val_dataloader, epoch, args, config, logger=None):
                 metrics=config.val_metrics,
                 requires_grad=False,
             )
-
             # val_dataloader was set to non distributed
             # if args.distributed:
             #     for metric, value in _metrics.items():
             #         _metrics[metric] = dist_utils.reduce_tensor(value, args).item()
-            # else:
+            # else:                
             for metric, value in _metrics.items():
-                _metrics[metric] = value.item()
-            
+                _metrics[metric] = value.item() if value.shape == torch.Size([]) else torch.mean(value).item()
             for metric in val_metrics:
                 val_metrics[metric].append(_metrics[metric])
 
