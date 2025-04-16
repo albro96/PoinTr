@@ -98,10 +98,10 @@ def build_loss(base_model, partial, gt, config, antagonist=None, normalize=True,
         if config.loss.cd_type == 'InfoCDL2':
             loss_func = Metrics._get_info_chamfer_distancel2
         if config.model.NAME == 'DiscreteVAE':
-            sparse_loss, dense_loss, klv_loss = base_model.module.get_loss(ret, gt)
-            if 'KLVLoss' in config.loss_metrics:
-                losses.KLVLoss = klv_loss
-                _loss += klv_loss * kwargs.loss.kld_weight * config.loss.coeffs.get("KLVLoss", 1.0)
+            sparse_loss, dense_loss, kld_loss = base_model.module.get_loss(ret, gt)
+            if 'KLDLoss' in config.loss_metrics:
+                losses.KLDLoss = kld_loss
+                _loss += kld_loss * kwargs.loss.kld_weight * config.loss.coeffs.get("KLDLoss", 1.0)
         else:
             sparse_loss, dense_loss = base_model.module.get_loss(ret=ret, gt=gt, loss_func=loss_func, config=config.loss)
 
@@ -234,7 +234,7 @@ def run_net(args, config):
     occl_weights = [0.0]
     window_size = 10
 
-    # metrics = validate(base_model, val_dataloader, start_epoch, args, config)
+    metrics = validate(base_model, val_dataloader, start_epoch, args, config)
 
     for epoch in range(start_epoch, config.max_epoch + 1):
 
@@ -263,6 +263,7 @@ def run_net(args, config):
 
         # with profiler.profile(record_shapes=True, use_cuda=True) as prof:
         for idx, data in enumerate(train_dataloader):
+            n_itr = epoch * n_batches + idx
 
             optimizer.zero_grad()
             data_time.update(time.time() - batch_start_time)
@@ -282,16 +283,21 @@ def run_net(args, config):
                 partial = data.to(args.device)
                 gt=partial
                 antagonist=None
+            elif config.datasettype == 'TSTDataset':
+                partial = data[0].to(args.device)
+                gt=partial
+                antagonist=None
+
 
             num_iter += 1
 
             if config.model_name in ['DiscreteVAE']:      
                 kwargs = EasyDict({'base_model':{
-                    'temperature': get_temp(config, num_iter),
+                    'temperature': get_temp(config, n_itr),
                     'hard': False
                     },
                     'loss': {
-                        'kld_weight': kld_weight(config, num_iter)
+                        'kld_weight': kld_weight(config, n_itr)
                     }
                 })
 
@@ -316,7 +322,6 @@ def run_net(args, config):
                     norm_type=2,
                     error_if_nonfinite=True,
                 )
-                # print("grad norm clip", getattr(config, "grad_norm_clip", 0))
                 num_iter = 0
                 optimizer.step()
                 # base_model.zero_grad()
@@ -473,57 +478,62 @@ def validate(base_model, val_dataloader, epoch, args, config, logger=None):
                 partial = data.to(args.device)
                 gt=partial
                 antagonist=None
+            elif config.datasettype == 'TSTDataset':
+                partial = data[0].to(args.device)
+                gt=partial # .reshape(1,-1,3).contiguous()
+                antagonist=None
 
             with torch.cuda.amp.autocast(enabled=args.use_amp_autocast):
                 if 'base_model' in kwargs:
                     ret = base_model(partial, **kwargs['base_model'])
                 else:
                     ret = base_model(partial)
-
+            
             coarse_points = ret[-2]
             dense_points = ret[-1]
+
+            if config.model.NAME in [ "DiscreteVAE"] and config.model.sequence_input:
+                dense_points.squeeze_(0)
+                coarse_points.squeeze_(0)
+                gt.squeeze_(0)
 
             if (
                 val_dataloader.dataset.patient == "0U1LI1CB"
                 or val_dataloader.dataset.patient == "0538") and args.log_data:
-                print('Logging PCDs')
-                if not config.model.NAME == "CRAPCN":
+                
+                if config.datasettype == 'SingleToothDataset' and str(val_dataloader.dataset.tooth)[-1] in ['1', '6']:
+                    tooth = val_dataloader.dataset.tooth
+                    save_pts = dense_points[0].detach().cpu().numpy()
+                    save_gt = gt[0].detach().cpu().numpy()
+                elif config.datasettype == 'TSTDataset' and config.model.NAME in ['DiscreteVAE']:
+                    tooth = 'all'
+                    save_pts = dense_points.reshape(-1, 3).contiguous().detach().cpu().numpy()
+                    save_gt = gt.reshape(-1, 3).contiguous().detach().cpu().numpy()
+                else:
+                    save_pts = dense_points[0].detach().cpu().numpy()
+                    save_gt = gt[0].detach().cpu().numpy()
+                    
+                print(f'Logging PCDs for {tooth}')
+
+                if not config.model.NAME == "CRAPCN" and config.datasettype == 'TeethSegDataset':
                     full_dense = torch.cat([partial, dense_points], dim=1)
                 else:
                     full_dense = dense_points
 
                 wandb.log(
                     {
-                        f"val/pcd/dense/{val_dataloader.dataset.tooth}": wandb.Object3D(
+                        f"val/pcd/dense/{tooth}": wandb.Object3D(
                             {
                                 "type": "lidar/beta",
-                                "points": dense_points[0].detach().cpu().numpy(),
+                                "points": save_pts,
                             }
                         ),
-                        # f"val/pcd/coarse/{val_dataloader.dataset.tooth}": wandb.Object3D(
-                        #     {
-                        #         "type": "lidar/beta",
-                        #         "points": coarse_points[0].detach().cpu().numpy(),
-                        #     }
-                        # ),
-                        # f"val/pcd/full-dense/{val_dataloader.dataset.tooth}": wandb.Object3D(
-                        #     {
-                        #         "type": "lidar/beta",
-                        #         "points": full_dense[0].detach().cpu().numpy(),
-                        #     }
-                        # ),
-                        f"val/pcd/gt/{val_dataloader.dataset.tooth}": wandb.Object3D(
+                        f"val/pcd/gt/{tooth}": wandb.Object3D(
                             {
                                 "type": "lidar/beta",
-                                "points": gt[0].detach().cpu().numpy(),
+                                "points": save_gt,
                             }
                         ),
-                        # f"val/pcd/partial/{val_dataloader.dataset.tooth}": wandb.Object3D(
-                        #     {
-                        #         "type": "lidar/beta",
-                        #         "points": partial[0].detach().cpu().numpy(),
-                        #     }
-                        # ),
                     },
                     step=epoch,
                 )
@@ -531,7 +541,7 @@ def validate(base_model, val_dataloader, epoch, args, config, logger=None):
             _metrics = Metrics.get(
                 pred=dense_points,
                 gt=gt,
-                partial=partial,
+                partial=None,
                 antagonist=antagonist,
                 metrics=config.val_metrics,
                 requires_grad=False,
@@ -785,7 +795,7 @@ def test(base_model, test_dataloader, args, config):
         for calctype in ['all', 'cleaned']:
             if filter_arr is None:
                 continue
-            
+
             for metric, value in test_metrics.items():
                 value = torch.tensor(value)
                 if calctype == 'cleaned':

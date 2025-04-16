@@ -25,7 +25,7 @@ def dataset_builder(args, config, mode, bs):
     elif config.datasettype == 'TSTDataset':
         from datasets.TSTDataset import TSTDataset as Dataset
 
-    dataset = Dataset(**config.dataset, mode=mode, device=args.device)
+    dataset = Dataset(**config.dataset, mode=mode, device=args.device, verbose=args.local_rank==0)
 
     shuffle = mode == "train"
     drop_last = mode == "train"

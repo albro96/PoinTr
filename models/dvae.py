@@ -9,6 +9,7 @@ from utils import misc
 from utils.logger import *
 
 from pytorch3d.loss import chamfer_distance
+# from models import Fold  
 
 # from knn_cuda import KNN
 # knn = KNN(k=4, transpose_mode=False)
@@ -114,47 +115,28 @@ class DGCNN(nn.Module):
 
         return f
 
-### ref https://github.com/Strawberry-Eat-Mango/PCT_Pytorch/blob/main/util.py ###
+
 def knn_point(nsample, xyz, new_xyz):
     """
     Input:
-        nsample: max sample number in local region
+        nsample: max sample number in local region (K)
         xyz: all points, [B, N, C]
         new_xyz: query points, [B, S, C]
     Return:
         group_idx: grouped points index, [B, S, nsample]
     """
-    sqrdists = square_distance(new_xyz, xyz)
-    _, group_idx = torch.topk(sqrdists, nsample, dim = -1, largest=False, sorted=False)
-    return group_idx
-
-def square_distance(src, dst):
-    """
-    Calculate Euclid distance between each two points.
-    src^T * dst = xn * xm + yn * ym + zn * zm；
-    sum(src^2, dim=-1) = xn*xn + yn*yn + zn*zn;
-    sum(dst^2, dim=-1) = xm*xm + ym*ym + zm*zm;
-    dist = (xn - xm)^2 + (yn - ym)^2 + (zn - zm)^2
-         = sum(src**2,dim=-1)+sum(dst**2,dim=-1)-2*src^T*dst
-    Input:
-        src: source points, [B, N, C]
-        dst: target points, [B, M, C]
-    Output:
-        dist: per-point square distance, [B, N, M]
-    """
-    B, N, _ = src.shape
-    _, M, _ = dst.shape
-    dist = -2 * torch.matmul(src, dst.permute(0, 2, 1))
-    dist += torch.sum(src ** 2, -1).view(B, N, 1)
-    dist += torch.sum(dst ** 2, -1).view(B, 1, M)
-    return dist    
+    # Using pytorch3d.ops.knn_points:
+    # - new_xyz: query points
+    # - xyz: reference points
+    # It returns (dists, indices, _)
+    _, group_idx, _ = knn_points(new_xyz, xyz, K=nsample)
+    return group_idx 
 
 class Group(nn.Module):
     def __init__(self, num_group, group_size):
         super().__init__()
         self.num_group = num_group
         self.group_size = group_size
-        # self.knn = KNN(k=self.group_size, transpose_mode=True)
 
     def forward(self, xyz):
         '''
@@ -167,7 +149,6 @@ class Group(nn.Module):
         # fps the centers out
         center = misc.fps(xyz, self.num_group) # B G 3
         # knn to get the neighborhood
-        # _, idx = self.knn(xyz, center) # B G M
         idx = knn_point(self.group_size, xyz, center) # B G M
         assert idx.size(1) == self.num_group
         assert idx.size(2) == self.group_size
@@ -276,47 +257,41 @@ class Decoder(nn.Module):
 class DiscreteVAE(nn.Module):
     def __init__(self, config, **kwargs):
         super().__init__()
-        self.group_size = config.group_size
-        self.num_group = config.num_group
+        
         self.encoder_dims = config.encoder_dims
         self.tokens_dims = config.tokens_dims
 
         self.decoder_dims = config.decoder_dims
         self.num_tokens = config.num_tokens
+        self.sequence_input = config.sequence_input
 
-        self.group_divider = Group(num_group = self.num_group, group_size = self.group_size)
+        self.num_group = config.num_group
+        self.group_size = config.group_size
+        
+        if not self.sequence_input:
+            self.group_divider = Group(num_group = self.num_group, group_size = self.group_size)
+        else:
+            self.group_divider = None
+
         self.encoder = Encoder(encoder_channel = self.encoder_dims)
         self.dgcnn_1 = DGCNN(encoder_channel = self.encoder_dims, output_channel = self.num_tokens)
         self.codebook = nn.Parameter(torch.randn(self.num_tokens, self.tokens_dims))
 
         self.dgcnn_2 = DGCNN(encoder_channel = self.tokens_dims, output_channel = self.decoder_dims)
         self.decoder = Decoder(encoder_channel = self.decoder_dims, num_fine = self.group_size)
-        # self.build_loss_func()
 
-        
-    # def build_loss_func(self):
-    #     self.loss_func_cdl1 = ChamferDistanceL1().cuda()
-    #     self.loss_func_cdl2 = ChamferDistanceL2().cuda()
-    #     # self.loss_func_emd = emd().cuda()
+    def get_loss(self, ret, gt, config=None, epoch=0, loss_func=None, square=False, grouploss=True):
 
-    # def recon_loss(self, ret, gt):
-    #     whole_coarse, whole_fine, coarse, fine, group_gt, _ = ret
+        if self.sequence_input:
+            logits, neighborhood, coarse, fine, coarse_grp, fine_grp = ret
+        else:
+            logits, neighborhood, coarse_grp, fine_grp, coarse, fine = ret
 
-    #     # bs, g, _, _ = coarse.shape
-
-    #     # coarse = coarse.reshape(bs*g, -1, 3).contiguous()
-    #     # fine = fine.reshape(bs*g, -1, 3).contiguous()
-    #     # group_gt = group_gt.reshape(bs*g, -1, 3).contiguous()
-
-    #     coarse_loss = self.loss_func_cdl1(coarse, group_gt)
-    #     dense_loss = self.loss_func_cdl1(fine, group_gt)
-
-    #     # loss_recon = loss_coarse_block + loss_fine_block
-
-    #     return coarse_loss, dense_loss
-
-    def get_loss(self, ret, gt, config=None, epoch=0, loss_func=None, square=False):
-        whole_coarse, whole_fine, neighborhood, logits, coarse, fine = ret
+        if grouploss:
+            bs, g, _, _ = coarse_grp.shape
+            coarse = coarse_grp.reshape(bs*g, -1, 3).contiguous()
+            fine = fine_grp.reshape(bs*g, -1, 3).contiguous()
+            gt = neighborhood.reshape(bs*g, -1, 3).contiguous()
 
         if loss_func is None:
             loss_coarse = chamfer_distance(coarse, gt, norm=2, single_directional=True)[0]
@@ -329,40 +304,39 @@ class DiscreteVAE(nn.Module):
             loss_coarse = loss_func(coarse, gt, single_directional=True, config=config.InfoCD)
             loss_fine = loss_func(fine, gt, config=config.InfoCD)    
 
-        # # reconstruction loss
-        # coarse_loss, dense_loss = self.recon_loss(ret, gt)
-        # kl divergence
-        # logits = ret[-1] # B G N
         softmax = F.softmax(logits, dim=-1)
         mean_softmax = softmax.mean(dim=1)
         log_qy = torch.log(mean_softmax)
         log_uniform = torch.log(torch.tensor([1. / self.num_tokens], device = gt.device))
-        klv_loss = F.kl_div(log_qy, log_uniform.expand(log_qy.size(0), log_qy.size(1)), None, None, 'batchmean', log_target = True)
+        kld_loss = F.kl_div(log_qy, log_uniform.expand(log_qy.size(0), log_qy.size(1)), None, None, 'batchmean', log_target = True)
 
-        return loss_coarse, loss_fine, klv_loss
-
+        return loss_coarse, loss_fine, kld_loss
 
     def forward(self, inp, temperature = 1., hard = False, **kwargs):
-        neighborhood, center = self.group_divider(inp)
+        if self.sequence_input:
+            center = torch.mean(inp, dim=-2, keepdim=True) # B G 1 3
+            neighborhood = inp - center # B G N 3
+        else:
+            neighborhood, center = self.group_divider(inp)
+
         logits = self.encoder(neighborhood)   #  B G C
         logits = self.dgcnn_1(logits, center) #  B G N
         soft_one_hot = F.gumbel_softmax(logits, tau = temperature, dim = 2, hard = hard) # B G N
         sampled = torch.einsum('b g n, n c -> b g c', soft_one_hot, self.codebook) # B G C
         feature = self.dgcnn_2(sampled, center)
-        coarse, fine = self.decoder(feature)
+        coarse_grp, fine_grp = self.decoder(feature)
 
-        with torch.no_grad():
-            whole_fine = (fine + center.unsqueeze(2)).reshape(inp.size(0), -1, 3)
-            whole_coarse = (coarse + center.unsqueeze(2)).reshape(inp.size(0), -1, 3)
+        bs, g, _, _ = coarse_grp.shape
 
-        assert fine.size(2) == self.group_size
+        coarse = coarse_grp.reshape(bs, -1, 3).contiguous()
+        fine = fine_grp.reshape(bs, -1, 3).contiguous()
 
-        bs, g, _, _ = coarse.shape
-        coarse = coarse.reshape(bs, -1, 3).contiguous()
-        fine = fine.reshape(bs, -1, 3).contiguous()
-        neighborhood = neighborhood.reshape(bs, -1, 3).contiguous()
+        assert fine_grp.size(2) == self.group_size
 
-        ret = (whole_coarse, whole_fine, neighborhood, logits, coarse, fine)
+        if self.sequence_input:
+            ret = (logits, neighborhood, coarse, fine, coarse_grp, fine_grp)
+        else:
+            ret = (logits, neighborhood, coarse_grp, fine_grp, coarse, fine)
 
         return ret
-
+       

@@ -19,7 +19,6 @@ sys.path.append(os.path.join(BASE_DIR, "../"))
 sys.path.append("/storage/share/code/01_scripts/modules/")
 
 from os_tools.import_dir_path import import_dir_path, convert_path
-
 from tools import run_net
 from tools import test_net
 from utils import parser, dist_utils, misc
@@ -33,6 +32,32 @@ from utils.config import *
 
 def main(rank=0, world_size=1):
     pada = import_dir_path()
+    args = EasyDict(
+        {
+            "launcher": "pytorch" if world_size > 1 else "none",
+            "num_gpus": world_size,
+            "local_rank": rank,
+            "num_workers": 0,  # only applies to mode='train', set to 0 for val and test
+            "seed": 0,
+            "deterministic": False,
+            "sync_bn": False,
+            "experiment_dir": pada.model_base_dir,
+            "start_ckpts": None,
+            "val_freq": 10,
+            "resume": False,
+            "mode": None,
+            "save_checkpoints": True,
+            "save_only_best": False,
+            "ckpt_dir": None,
+            "cfg_dir": None,
+            'log_testdata': True,
+            'ckpt_path': convert_path(r"O:\data\models\PoinTr\sweep\PoinTr-InfoCD-CD-downsample1\ckpt\ckpt-best-zany-sweep-2.pth"),
+            "gt_partial_saved": False,
+            'no_occlusion_val': 100,
+            "test": False,
+            "log_data": False,  # if true: wandb logger on and save ckpts to local drive
+        }
+    )
 
     data_config = EasyDict(
         {
@@ -69,33 +94,6 @@ def main(rank=0, world_size=1):
         }
     )
 
-    args = EasyDict(
-        {
-            "launcher": "pytorch" if world_size > 1 else "none",
-            "num_gpus": world_size,
-            "local_rank": rank,
-            "num_workers": 0,  # only applies to mode='train', set to 0 for val and test
-            "seed": 0,
-            "deterministic": False,
-            "sync_bn": False,
-            "experiment_dir": pada.model_base_dir,
-            "start_ckpts": None,
-            "val_freq": 10,
-            "resume": False,
-            "mode": None,
-            "save_checkpoints": True,
-            "save_only_best": False,
-            "ckpt_dir": None,
-            "cfg_dir": None,
-            'log_testdata': True,
-            'ckpt_path': convert_path(r"O:\data\models\PoinTr\sweep\PoinTr-InfoCD-CD-downsample1\ckpt\ckpt-best-zany-sweep-2.pth"),
-            "gt_partial_saved": False,
-            'no_occlusion_val': 100,
-            "test": False,
-            "log_data": True,  # if true: wandb logger on and save ckpts to local drive
-        }
-    )
-
     config = EasyDict(
         {
         'loss': {
@@ -103,7 +101,7 @@ def main(rank=0, world_size=1):
                 "active_metrics": {
                     "SparseLoss": True,
                     "DenseLoss": True,
-                    'KLVLoss': True,
+                    'KLDLoss': True,
                     "OcclusionLoss": False,
                     "ClusterDistLoss": False,
                     "ClusterNumLoss": False,
@@ -113,7 +111,7 @@ def main(rank=0, world_size=1):
                 "coeffs": {
                     "SparseLoss": 1.0,
                     "DenseLoss": 1.0,
-                    'KLVLoss': 1.0,
+                    'KLDLoss': 1.0,
                     "OcclusionLoss": 1.0,
                     "ClusterDistLoss": 1.0,
                     "ClusterPosLoss": 1.0,
@@ -133,7 +131,7 @@ def main(rank=0, world_size=1):
             "optimizer": {
                 "type": "AdamW",
                 "kwargs": {
-                    "lr": 0.0001,
+                    "lr": 0.001,
                     "weight_decay": 0.001,  # 0.0001
                 },
             },
@@ -170,9 +168,9 @@ def main(rank=0, world_size=1):
                 "InvIOULoss",
             ],
             "occlusion_metrics": ['OcclusionLoss', 'ClusterDistLoss', 'ClusterNumLoss', 'ClusterPosLoss', 'PenetrationLoss'],
-            "total_bs": int(256 * world_size),  # CRAPCN: int(30*world_size),
+            "total_bs": int(32 * world_size),  # CRAPCN: int(30*world_size),
             "step_per_update": 1,
-            "grad_norm_clip": 5,
+            "grad_norm_clip": 10,
             "model_name": "DiscreteVAE",  # "DiscreteVAE" "PoinTr", 'CRAPCN'
             'datasettype': 'TeethSegDataset', # TSTDataset
             "max_epoch": 500,
@@ -243,13 +241,14 @@ def main(rank=0, world_size=1):
 
     network_config_dict.DiscreteVAE = {
         "model": {
-        "NAME": "DiscreteVAE",
-        "group_size": 32,
-        "num_group": 64,
-        "encoder_dims": 256,
-        "num_tokens": 8192,
-        "tokens_dims": 256,
-        "decoder_dims": 256
+            "NAME": "DiscreteVAE",
+            "group_size": 1024, #64, # 64
+            "num_group": 28, # None, #32, # 32
+            "encoder_dims": 256,
+            "num_tokens": 1024, #8192,
+            "tokens_dims": 768, #256,
+            "decoder_dims": 256,
+            'sequence_input': True,
         },
         'bnmscheduler': None,
         "scheduler": {
@@ -271,28 +270,56 @@ def main(rank=0, world_size=1):
             "target": 0.1,
             "ntime": 100000
         },   
-        # 'loss_metrics': ['Loss1', 'Loss2'],
-        'datasettype': 'SingleToothDataset',
+        'datasettype': 'TSTDataset',
         'dataset':{
-            "num_points": 2048,
+            "num_points_gt": 1024,
+            "num_points_corr_anta": 1024,
             "tooth_range": {
-                "teeth": 'full', 
+                "corr": 'full', #"full", #[44, 45, 46, 47], #"full",
+                "gt":  [6], # 5# # full"
                 "jaw": "full",
                 "quadrants": "all",
             },
             "data_type": "npy",
             "use_fixed_split": True,
-            "enable_cache": True,
+            "enable_cache": False,
             "create_cache_file": True,
-            "overwrite_cache_file": False,
+            "overwrite_cache_file": True,
+            "return_antagonist": False,
             "return_normals": False, 
             "dataset": "orthodental",
             "data_dir": None,
             "datahash": "15c02eb0",
-            'normalize_mean': True,
+            "crop_anta": True,
+            'crop_anta_thresh': 1,
+            'normalize_mean': False,
             'normalize_pose': False,
             'normalize_scale': False,
-        }}
+        },
+        # 'datasettype': 'SingleToothDataset',
+        # 'dataset':{
+        #     "num_points": 2048,
+        #     "tooth_range": {
+        #         "teeth": 'full', 
+        #         "jaw": "full",
+        #         "quadrants": "all",
+        #     },
+        #     "data_type": "npy",
+        #     "use_fixed_split": True,
+        #     "enable_cache": True,
+        #     "create_cache_file": True,
+        #     "overwrite_cache_file": False,
+        #     "return_normals": False, 
+        #     "dataset": "orthodental",
+        #     "data_dir": None,
+        #     "datahash": "15c02eb0",
+        #     'normalize_mean': True,
+        #     'normalize_pose': False,
+        #     'normalize_scale': False,
+        # }
+        }
+    if network_config_dict.DiscreteVAE.datasettype == 'SingleToothDataset' and network_config_dict.DiscreteVAE.model.num_group == None:
+        network_config_dict.DiscreteVAE.model.num_group = int(network_config_dict.DiscreteVAE.dataset.num_points/network_config_dict.DiscreteVAE.model.group_size)
 
     network_config_dict.PoinTr = {
         "model": {
@@ -481,7 +508,8 @@ def main(rank=0, world_size=1):
         # update wandb config
         wandb.config.update(config, allow_val_change=True)
 
-    pprint(config)
+    if args.local_rank == 0:
+        pprint(config)
 
     torch.autograd.set_detect_anomaly(True)
     run_net(args, config)
@@ -493,7 +521,7 @@ def main(rank=0, world_size=1):
 if __name__ == "__main__":
 
     # User Input
-    num_gpus = 4  # number of gpus, dont use 3
+    num_gpus = 1  # number of gpus, dont use 3
     print("Number of GPUs: ", num_gpus)
 
     if num_gpus > 1:
